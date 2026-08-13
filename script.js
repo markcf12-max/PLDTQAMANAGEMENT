@@ -333,26 +333,26 @@ async function enterApp() {
 const NON_ISSUE_VALUES = new Set(['', 'NO OPPORTUNITY', 'NA', 'N/A', 'NO', 'NONE']);
 
 const HIT_PARAMS = [
-    { col: 'IRRELEVANT SOLUTION', category: 'Reliable', label: 'Irrelevant solution given', type: 'descriptive' },
-    { col: 'INCOMPLETE SOLUTION', category: 'Reliable', label: 'Incomplete solution given', type: 'descriptive' },
-    { col: 'UNTIMELY SOLUTION (ZTP)', category: 'Reliable', label: 'Untimely solution (ZTP)', type: 'descriptive' },
-    { col: 'UNCLEAR SOLUTION', category: 'Reliable', label: 'Unclear solution given', type: 'descriptive' },
-    { col: 'Poor Listening Skills?', category: 'Personable', label: 'Poor listening skills', type: 'descriptive' },
-    { col: 'Customer Validation and Empathy Gap?', category: 'Personable', label: 'Empathy / validation gap', type: 'descriptive' },
-    { col: 'Did not adjust the tone/pace to match the customer?', category: 'Personable', label: 'Tone/pace not matched to customer', type: 'descriptive' },
-    { col: 'Did not adjust to the customers language?', category: 'Personable', label: 'Language not adjusted to customer', type: 'descriptive' },
-    { col: 'Negative Words, Phrasing and Limitations?', category: 'Personable', label: 'Negative words / phrasing used', type: 'descriptive' },
-    { col: 'Unfriendly/discourteous/sarcastic?', category: 'Personable', label: 'Unfriendly, discourteous, or sarcastic tone', type: 'descriptive' },
-    { col: 'Sounded transactional or robotic?', category: 'Personable', label: 'Sounded transactional or robotic', type: 'descriptive' },
-    { col: 'FAST: Were there other Agent factors observed that affected the customer experience?', category: 'Fast', label: 'Other agent factor slowed the resolution', type: 'descriptive' },
-    { col: 'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?', category: 'Safe & Secure', label: 'Customer authentication process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE DATA PRIVACY POLICY?', category: 'Safe & Secure', label: 'Data privacy policy not followed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?', category: 'Safe & Secure', label: 'Customer info not updated in tool', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE CSAT/NPS PROCESS?', category: 'Safe & Secure', label: 'CSAT/NPS process not followed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?', category: 'Safe & Secure', label: 'System documentation process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?', category: 'Safe & Secure', label: 'System tagging process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?', category: 'Safe & Secure', label: 'Grammar / prescribed language standard missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'IS THIS A POTENTIAL CUSTOMER MISTREAT?', category: 'Mistreat', label: 'Potential customer mistreat flagged', type: 'boolean', hitValue: 'YES' }
+    { col: 'IRRELEVANT SOLUTION', alt: ['IRRELEVANT'], category: 'Reliable', label: 'Irrelevant solution given', type: 'descriptive' },
+    { col: 'INCOMPLETE SOLUTION', alt: ['INCOMPLETE'], category: 'Reliable', label: 'Incomplete solution given', type: 'descriptive' },
+    { col: 'UNTIMELY SOLUTION (ZTP)', alt: ['UNTIMELY', 'ZTP'], category: 'Reliable', label: 'Untimely solution (ZTP)', type: 'descriptive' },
+    { col: 'UNCLEAR SOLUTION', alt: ['UNCLEAR'], category: 'Reliable', label: 'Unclear solution given', type: 'descriptive' },
+    { col: 'Poor Listening Skills?', alt: ['POOR LISTENING'], category: 'Personable', label: 'Poor listening skills', type: 'descriptive' },
+    { col: 'Customer Validation and Empathy Gap?', alt: ['EMPATHY', 'VALIDATION'], category: 'Personable', label: 'Empathy / validation gap', type: 'descriptive' },
+    { col: 'Did not adjust the tone/pace to match the customer?', alt: ['TONE/PACE', 'TONE PACE'], category: 'Personable', label: 'Tone/pace not matched to customer', type: 'descriptive' },
+    { col: 'Did not adjust to the customers language?', alt: ['CUSTOMERS LANGUAGE', 'LANGUAGE'], category: 'Personable', label: 'Language not adjusted to customer', type: 'descriptive' },
+    { col: 'Negative Words, Phrasing and Limitations?', alt: ['NEGATIVE WORDS'], category: 'Personable', label: 'Negative words / phrasing used', type: 'descriptive' },
+    { col: 'Unfriendly/discourteous/sarcastic?', alt: ['UNFRIENDLY'], category: 'Personable', label: 'Unfriendly, discourteous, or sarcastic tone', type: 'descriptive' },
+    { col: 'Sounded transactional or robotic?', alt: ['ROBOTIC'], category: 'Personable', label: 'Sounded transactional or robotic', type: 'descriptive' },
+    { col: 'FAST: Were there other Agent factors observed that affected the customer experience?', alt: ['OTHER AGENT FACTOR', 'AGENT FACTORS OBSERVED'], category: 'Fast', label: 'Other agent factor slowed the resolution', type: 'descriptive' },
+    { col: 'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?', alt: ['AUTHENTICATION PROCESS'], category: 'Safe & Secure', label: 'Customer authentication process missed', type: 'boolean', hitValue: 'NO' },
+    { col: 'DID WE FOLLOW THE DATA PRIVACY POLICY?', alt: ['DATA PRIVACY'], category: 'Safe & Secure', label: 'Data privacy policy not followed', type: 'boolean', hitValue: 'NO' },
+    { col: 'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?', alt: ['CUSTOMER INFORMATION IN THE TOOL'], category: 'Safe & Secure', label: 'Customer info not updated in tool', type: 'boolean', hitValue: 'NO' },
+    { col: 'DID WE FOLLOW THE CSAT/NPS PROCESS?', alt: ['CSAT', 'NPS'], category: 'Safe & Secure', label: 'CSAT/NPS process not followed', type: 'boolean', hitValue: 'NO' },
+    { col: 'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?', alt: ['SYSTEM DOCUMENTATION'], category: 'Safe & Secure', label: 'System documentation process missed', type: 'boolean', hitValue: 'NO' },
+    { col: 'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?', alt: ['SYSTEM TAGGING'], category: 'Safe & Secure', label: 'System tagging process missed', type: 'boolean', hitValue: 'NO' },
+    { col: 'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?', alt: ['PRESCRIBED LANGUAGE', 'CORRECT GRAMMAR'], category: 'Safe & Secure', label: 'Grammar / prescribed language standard missed', type: 'boolean', hitValue: 'NO' },
+    { col: 'IS THIS A POTENTIAL CUSTOMER MISTREAT?', alt: ['MISTREAT'], category: 'Mistreat', label: 'Potential customer mistreat flagged', type: 'boolean', hitValue: 'YES' }
 ];
 
 function escapeHtml(str) {
@@ -365,12 +365,12 @@ function normVal(v) {
     return (v === undefined || v === null) ? '' : String(v).trim().toUpperCase();
 }
 
-/* ---- SCORE SANITIZER (fixes score generation) ----
-   Accepts numbers or text ("85", "85%", "0.85"), always returns
-   a clean integer 0-100, or null when the value is not a valid score. */
+/* ---- SCORE SANITIZER ----
+   Accepts numbers or text ("85", "85%", "0.85") and always returns a clean
+   integer 0-100, or null when the value is not a valid score. */
 function toScore(v) {
     if (v === null || v === undefined) return null;
-    const cleaned = String(v).replace(/[^0-9.\-]/g, ''); // strips %, commas, spaces
+    const cleaned = String(v).replace(/[^0-9.\-]/g, '');
     if (!cleaned || cleaned === '-' || cleaned === '.') return null;
     let n = parseFloat(cleaned);
     if (!isFinite(n)) return null;
@@ -380,10 +380,20 @@ function toScore(v) {
     return n;
 }
 
+/* Overall score with fallback: uses the column when present, otherwise the
+   average of the available pillars. */
+function overallScore(r) {
+    const direct = toScore(r['OVERALL SCORE']);
+    if (direct !== null) return direct;
+    const parts = ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE']
+        .map(k => toScore(r[k])).filter(v => v !== null);
+    return parts.length ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
+}
+
 function rowIsPassed(r) {
     const pr = normVal(r['OVERALL PASSRATE']);
     if (pr) return pr.includes('PASS'); // accepts PASSED / PASS / Passed etc.
-    const s = toScore(r['OVERALL SCORE']);
+    const s = overallScore(r);
     return s !== null && s >= 85;
 }
 
@@ -546,6 +556,17 @@ const NEEDED_FIELDS = [
     'RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS'
 ].concat(HIT_PARAMS.map(p => p.col));
 
+/* Alternate header names so columns map even when the Excel headers differ. */
+const HEADER_ALIASES = {
+    'OVERALL SCORE': ['OVERALL SCORE', 'TOTAL SCORE', 'FINAL SCORE', 'QA SCORE', 'OVERALL', 'SCORE'],
+    'SAFE & SECURE': ['SAFE & SECURE', 'SAFE AND SECURE', 'SAFE&SECURE', 'SAFE & SECURED', 'S&S', 'SECURE'],
+    'OVERALL PASSRATE': ['OVERALL PASSRATE', 'PASS RATE', 'PASSRATE', 'RESULT', 'PASS/FAIL'],
+    'CM': ['CM', 'CM RATING']
+};
+HIT_PARAMS.forEach(p => { HEADER_ALIASES[p.col] = [p.col, ...(p.alt || [])]; });
+
+const SCORE_FIELDS = ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'];
+
 async function handleDataUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -556,9 +577,10 @@ async function handleDataUpload(event) {
         if (!rows.length) throw new Error('Data file appears empty.');
         const headerMap = {};
         NEEDED_FIELDS.forEach(f => {
-            const h = findHeader(rows[0], [f]);
+            const h = findHeader(rows[0], HEADER_ALIASES[f] || [f]);
             if (h) headerMap[f] = h;
         });
+        const unmapped = SCORE_FIELDS.filter(f => !headerMap[f]);
         const rosterSnap = await getDocs(collection(db, 'roster'));
         const nameToEmail = {};
         rosterSnap.forEach(d => {
@@ -575,16 +597,18 @@ async function handleDataUpload(event) {
             });
             UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
             TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
-            // FIXED: scores sanitized to clean integers 0-100 (or null)
-            ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'].forEach(k => {
-                out[k] = toScore(out[k]);
-            });
+            // Scores sanitized to clean integers 0-100 (or null)
+            SCORE_FIELDS.forEach(k => { out[k] = toScore(out[k]); });
+            if (out['OVERALL SCORE'] === null) out['OVERALL SCORE'] = overallScore(out);
             out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
             return out;
         }).filter(r => r['AGENT/OFFICER NAME']);
         await replaceAuditData(processed);
         cachedAuditRows = processed;
-        if (dataStatus) dataStatus.innerHTML = `✅ Successfully uploaded ${processed.length} audit records.`;
+        if (dataStatus) {
+            dataStatus.innerHTML = `✅ Successfully uploaded ${processed.length} audit records.` +
+                (unmapped.length ? ` ⚠️ No column found for: ${unmapped.join(', ')}.` : '');
+        }
         populateDropdownOptions(processed);
         filterData();
     } catch (err) {
@@ -683,7 +707,7 @@ function renderGroupedBarChart(data) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const groups = {};
-    // FIXED: values coerced via toScore -> reduce() now always adds numbers
+    // Values coerced via toScore/overallScore -> reduce() always adds numbers
     data.forEach(r => {
         const lob = r['LINE OF BUSINESS'] || r['BRAND'] || 'Unspecified';
         if (!groups[lob]) {
@@ -694,7 +718,7 @@ function renderGroupedBarChart(data) {
         push(groups[lob].personable, r['PERSONABLE']);
         push(groups[lob].fast,       r['FAST']);
         push(groups[lob].safe,       r['SAFE & SECURE']);
-        push(groups[lob].overall,    r['OVERALL SCORE']);
+        push(groups[lob].overall,    overallScore(r));
     });
     const labels = Object.keys(groups).sort();
     const getAvg = (arr) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
@@ -792,9 +816,10 @@ function renderSupervisorDashboard(data) {
 
     renderGroupedBarChart(data);
 
-    // FIXED: averages computed from sanitized numbers only
+    // Averages computed from sanitized numbers only
+    const scoreOf = (r, key) => key === 'OVERALL SCORE' ? overallScore(r) : toScore(r[key]);
     const avg = (key) => {
-        const vals = data.map(r => toScore(r[key])).filter(v => v !== null);
+        const vals = data.map(r => scoreOf(r, key)).filter(v => v !== null);
         if (!vals.length) return null;
         return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
     };
@@ -807,7 +832,7 @@ function renderSupervisorDashboard(data) {
     const buckets = { b1: [], b2: [], b3: [] };
     data.forEach(r => buckets[tenureBucket(r['AGENT TENURE'])].push(r));
     const bucketAvg = (arr) => {
-        const vals = arr.map(r => toScore(r['OVERALL SCORE'])).filter(v => v !== null);
+        const vals = arr.map(overallScore).filter(v => v !== null);
         return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) + '%' : '-';
     };
     const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
@@ -834,7 +859,7 @@ function renderSupervisorDashboard(data) {
     data.forEach(r => {
         const tl = r['TEAM LEADER'] || 'Unassigned';
         if (!tlScores[tl]) tlScores[tl] = { total: 0, count: 0 };
-        const s = toScore(r['OVERALL SCORE']);
+        const s = overallScore(r);
         if (s !== null) {
             tlScores[tl].total += s;
             tlScores[tl].count++;
@@ -894,9 +919,9 @@ async function renderAgentView() {
     if (emptyState) emptyState.style.display = 'none';
     if (agentContent) agentContent.style.display = 'flex';
 
-    // FIXED: averages computed from sanitized numbers only
+    const scoreOf = (r, key) => key === 'OVERALL SCORE' ? overallScore(r) : toScore(r[key]);
     const avg = (key) => {
-        const vals = myRows.map(r => toScore(r[key])).filter(v => v !== null);
+        const vals = myRows.map(r => scoreOf(r, key)).filter(v => v !== null);
         return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
     };
     const tiles = [
@@ -916,7 +941,7 @@ async function renderAgentView() {
     const sorted = [...myRows].sort((a, b) => String(b['WEEKENDING'] || '').localeCompare(String(a['WEEKENDING'] || '')));
     const auditRowHtml = (r) => {
         const issues = getRowIssues(r);
-        const score = toScore(r['OVERALL SCORE']);
+        const score = overallScore(r);
         const passed = rowIsPassed(r);
         const tagsHtml = issues.length
             ? issues.map(i => `<span class="tag ${i.category.replace(/\s|&/g, '')}">${escapeHtml(i.label)}</span>`).join('')
@@ -955,7 +980,7 @@ async function renderAgentView() {
         agentAuditList.innerHTML = orderedMonths.map((month, idx) => {
             const rows = groups[month];
             const monthAvg = (() => {
-                const vals = rows.map(r => toScore(r['OVERALL SCORE'])).filter(v => v !== null);
+                const vals = rows.map(overallScore).filter(v => v !== null);
                 return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
             })();
             return `<details class="month-group" ${idx === 0 ? 'open' : ''}>
