@@ -626,13 +626,34 @@ async function handleDataUpload(event) {
         await replaceAuditData(processed);
 
         cachedAuditRows = processed;
+
+        // expose cache for debugging in Console:
+        window.__cachedAuditRows = cachedAuditRows;
+
         // quick check that cache was set
         console.log('cachedAuditRows length', cachedAuditRows.length);
+
+        // small pass/fail diagnostic (uses same logic as UI)
+        const passDiag = (() => {
+            const rowsArr = window.__cachedAuditRows || [];
+            const isPassed = r => {
+                const passrate = r['OVERALL PASSRATE'];
+                if (passrate && String(passrate).trim().toUpperCase()) {
+                    return String(passrate).trim().toUpperCase() === 'PASSED';
+                }
+                const score = r['OVERALL SCORE'];
+                return (typeof score === 'number' ? score : parseFloat(score || 0)) >= 85;
+            };
+            const passed = rowsArr.filter(isPassed).length;
+            return { passed, total: rowsArr.length, passPct: rowsArr.length ? Math.round((passed/rowsArr.length)*100) : 0 };
+        })();
+        console.log('handleDataUpload — pass diagnostic:', passDiag);
 
         if (dataStatus) dataStatus.innerHTML = `✅ Successfully uploaded ${processed.length} audit records.`;
         
         populateDropdownOptions(processed);
-        filterData();
+        // ensure UI shows the full newly uploaded dataset
+        resetFilters();
     } catch (err) {
         console.error("Data Upload Failed:", err);
         if (dataStatus) dataStatus.innerHTML = `⚠️ Upload failed: ${err.message}`;
