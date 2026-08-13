@@ -477,6 +477,22 @@ function findHeader(row, candidates) {
     return null;
 }
 
+function findHeaderByWords(row, wordGroups) {
+    if (!row) return null;
+    const keys = Object.keys(row);
+    const clean = v => String(v || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+    for (const group of wordGroups) {
+        const words = group.map(clean);
+        const hit = keys.find(k => words.every(w => clean(k).includes(w)));
+        if (hit) return hit;
+    }
+    return null;
+}
+
+function normalizeEmployeeId(value) {
+    return String(value || '').trim().replace(/\.0$/, '').replace(/\s+/g, '');
+}
+
 /* ==========================================================================
    DATA UPLOADS & RESYNC
    ========================================================================== */
@@ -493,7 +509,7 @@ async function handleRosterUpload(event) {
         const emailKey = findHeader(rows[0], ['PLDT/SMART Domain v2', 'PLDT/SMART Domain', 'Domain', 'Email', 'Work Email', 'Conduent Email Address', 'Email Address']);
         const nameKey = findHeader(rows[0], ['Employee Name', 'Agent Name', 'AGENT/OFFICER NAME', 'Name', 'Full Name']);
         const idKey = findHeader(rows[0], ['Win ID', 'WIN ID', 'ID', 'Employee ID', 'Agent ID']);
-        const supervisorKey = findHeader(rows[0], ['Supervisor', 'Supervisor Name', 'Immediate Supervisor', 'Team Leader', 'TEAM LEADER', 'TL Name']);
+        const supervisorKey = findHeader(rows[0], ['Supervisor', 'Supervisor Name', 'Immediate Supervisor', 'Team Leader', 'TEAM LEADER', 'TL Name', 'Sup Name', 'Reporting Manager', 'Manager Name']) || findHeaderByWords(rows[0], [['supervisor'], ['team', 'leader'], ['reporting', 'manager'], ['manager', 'name']]);
 
         if (!emailKey || !nameKey) {
             throw new Error('Missing required Roster headers (Domain/Email and Agent Name).');
@@ -511,7 +527,8 @@ async function handleRosterUpload(event) {
         await clearCollection('roster');
         await batchWriteDocs('roster', roster, (r) => r.email);
 
-        if (rosterStatus) rosterStatus.innerHTML = `✅ Roster uploaded: ${roster.length} agent records.`;
+        const withSupervisor = roster.filter(r => r.teamLeader).length;
+        if (rosterStatus) rosterStatus.innerHTML = `✅ Roster uploaded: ${roster.length} agents; ${withSupervisor} with Supervisor/Team Leader.${supervisorKey ? ` Detected column: ${escapeHtml(supervisorKey)}` : ' No supervisor column detected.'}`;
     } catch (err) {
         console.error(err);
         if (rosterStatus) rosterStatus.innerHTML = `⚠️ Roster upload failed: ${err.message}`;
@@ -532,37 +549,41 @@ async function refreshRosterStatus() {
 
 async function resyncAgentEmails() {
     const statusEl = document.getElementById('resyncStatus');
-    if (statusEl) statusEl.textContent = 'Re-syncing email matches...';
-
+    if (statusEl) statusEl.textContent = 'Re-syncing agent, email, and Team Leader matches...';
     try {
         const rosterSnap = await getDocs(collection(db, 'roster'));
-        const nameToEmail = {};
+        const byName = {}, byId = {};
         rosterSnap.forEach(d => {
-            const data = d.data();
-            nameToEmail[normalizeName(data.agentName)] = d.id;
+            const x = d.data();
+            const item = { email: d.id, teamLeader: String(x.teamLeader || '').trim() };
+            byName[normalizeName(x.agentName)] = item;
+            const id = normalizeEmployeeId(x.agentId);
+            if (id) byId[id] = item;
         });
-
         const dataSnap = await getDocs(collection(db, 'auditData'));
         const docs = dataSnap.docs;
-
-        let matched = 0, unmatched = 0;
+        let matched = 0, unmatched = 0, leaders = 0;
         const promises = [];
-
         for (let i = 0; i < docs.length; i += 400) {
             const chunk = docs.slice(i, i + 400);
             const batch = writeBatch(db);
             chunk.forEach(d => {
                 const row = d.data();
-                const key = normalizeName(row['AGENT/OFFICER NAME']);
-                const email = nameToEmail[key] || '';
+                const id = normalizeEmployeeId(row['EE number/ID number'] || row['WIN ID'] || row['ID']);
+                const match = (id && byId[id]) || byName[normalizeName(row['AGENT/OFFICER NAME'])] || {};
+                const email = match.email || '';
+                const teamLeader = String(row['TEAM LEADER'] || match.teamLeader || '').trim();
                 if (email) matched++; else unmatched++;
-                batch.update(doc(db, 'auditData', d.id), { agentEmailLower: email });
+                if (teamLeader) leaders++;
+                batch.update(doc(db, 'auditData', d.id), { agentEmailLower: email, 'TEAM LEADER': teamLeader });
             });
             promises.push(batch.commit());
         }
         await Promise.all(promises);
-
-        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} records matched to email, ${unmatched} unmatched.`;
+        await loadAllAuditData();
+        populateDropdownOptions(cachedAuditRows);
+        filterData();
+        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} agent matches, ${leaders} rows with Team Leader, ${unmatched} unmatched.`;
     } catch (err) {
         console.error(err);
         if (statusEl) statusEl.textContent = '⚠️ Re-sync failed: ' + err.message;
@@ -733,13 +754,13 @@ async function handleDataUpload(event) {
         if (missing.length) throw new Error('Missing required raw-data column(s): ' + missing.join(', '));
 
         const rosterSnap = await getDocs(collection(db, 'roster'));
-        const nameToRoster = {};
+        const nameToRoster = {}, idToRoster = {};
         rosterSnap.forEach(d => {
             const data = d.data();
-            nameToRoster[normalizeName(data.agentName)] = {
-                email: d.id,
-                teamLeader: String(data.teamLeader || '').trim()
-            };
+            const item = { email: d.id, teamLeader: String(data.teamLeader || '').trim() };
+            nameToRoster[normalizeName(data.agentName)] = item;
+            const rosterId = normalizeEmployeeId(data.agentId);
+            if (rosterId) idToRoster[rosterId] = item;
         });
         const UPPERCASE_FIELDS = ['FORM TYPE', 'AGENT TENURE'];
         const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER'];
@@ -760,7 +781,8 @@ async function handleDataUpload(event) {
             if (period.month) out['MONTH'] = period.month;
             calculatedCount++;
 
-            const rosterMatch = nameToRoster[normalizeName(out['AGENT/OFFICER NAME'])] || {};
+            const auditId = normalizeEmployeeId(out['EE number/ID number'] || out['WIN ID'] || out['ID']);
+            const rosterMatch = (auditId && idToRoster[auditId]) || nameToRoster[normalizeName(out['AGENT/OFFICER NAME'])] || {};
             out.agentEmailLower = rosterMatch.email || '';
             if (!String(out['TEAM LEADER'] || '').trim()) out['TEAM LEADER'] = rosterMatch.teamLeader || '';
             return out;
