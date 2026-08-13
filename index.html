@@ -3,24 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PLDT Quality Score Dashboard</title>
+<title>PLDT Enterprise Quality Scores and Cluster Management</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<!-- Chart.js & DataLabels Plugin -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-
 <link rel="stylesheet" href="styles.css">
 <script type="module" src="script.js"></script>
 </head>
 <body>
 
-<!-- ============ HEADER ============ -->
 <div class="header-banner">
-    <div class="header-left">
-        <span class="header-logo">PLDT Quality Management</span>
-    </div>
+    <div class="header-left"><span class="header-logo">PLDT Enterprise</span></div>
     <div class="header-title">
-        <h1>PLDT Quality Score Management</h1>
+        <h1>PLDT Enterprise Quality Scores and Cluster Management</h1>
         <p>GENUINE CARE AUDIT FORM</p>
     </div>
     <div class="header-right">
@@ -32,264 +26,129 @@
     </div>
 </div>
 
-<!-- ============ AUTH SCREEN ============ -->
 <div class="auth-wrap" id="authScreen">
     <div class="auth-card">
         <div class="auth-tabs">
             <div class="auth-tab active" id="tabLogin" onclick="switchAuthTab('login')">Log In</div>
             <div class="auth-tab" id="tabSignup" onclick="switchAuthTab('signup')">Create Account</div>
         </div>
-
-        <!-- LOGIN -->
         <div class="auth-body" id="loginPane">
             <h2>Welcome back</h2>
-            <p class="sub">Log in with your work email to view your Quality Score dashboard.</p>
-            <div class="form-group">
-                <label>Work Email</label>
-                <input type="email" id="loginEmail" placeholder="name@company.com" autocomplete="username">
-            </div>
-            <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password">
-            </div>
+            <div class="form-group"><label>Work Email</label><input type="email" id="loginEmail" placeholder="name@company.com"></div>
+            <div class="form-group"><label>Password</label><input type="password" id="loginPassword" placeholder="••••••••"></div>
             <button class="btn-primary" onclick="handleLogin()">Log In</button>
             <div class="auth-msg" id="loginMsg"></div>
-
             <div class="auth-hint">
-                <strong>Temporary quick access</strong> — use while setting up real accounts. Remove this section once your team is signing up normally.
-                <div style="display:flex; gap:8px; margin-top:8px;">
-                    <button type="button" class="btn-primary" style="background:#1a1a1a;" onclick="quickAccess('team_leader')">Team Leader</button>
-                    <button type="button" class="btn-primary" style="background:#1a1a1a;" onclick="quickAccess('quality')">Quality</button>
-                </div>
+                Quick Access: 
+                <button type="button" class="btn-primary" style="background:#1a1a1a;margin-top:6px;" onclick="quickAccess('team_leader')">Team Leader</button>
+                <button type="button" class="btn-primary" style="background:#1a1a1a;margin-top:6px;" onclick="quickAccess('quality')">Quality</button>
             </div>
         </div>
-
-        <!-- SIGNUP -->
         <div class="auth-body" id="signupPane" style="display:none;">
-            <h2>Create your account</h2>
-            <p class="sub">Agents are matched automatically to their audit scores using the roster your supervisor uploaded.</p>
-
+            <h2>Create Account</h2>
             <div class="role-toggle">
-                <label id="roleAgentLabel" class="checked" onclick="setSignupRole('agent')"><span>Agent</span></label>
-                <label id="roleTeamLeaderLabel" onclick="setSignupRole('team_leader')"><span>Team Leader</span></label>
-                <label id="roleQualityLabel" onclick="setSignupRole('quality')"><span>Quality</span></label>
+                <label id="roleAgentLabel" class="checked" onclick="setSignupRole('agent')">Agent</label>
+                <label id="roleTeamLeaderLabel" onclick="setSignupRole('team_leader')">Team Leader</label>
+                <label id="roleQualityLabel" onclick="setSignupRole('quality')">Quality</label>
             </div>
-
-            <div class="form-group">
-                <label>Work Email</label>
-                <input type="email" id="signupEmail" placeholder="name@pldt-agent-email.com" autocomplete="username">
-            </div>
-
+            <div class="form-group"><label>Work Email</label><input type="email" id="signupEmail"></div>
             <div class="field-row-2">
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="signupPassword" placeholder="••••••••" autocomplete="new-password">
-                </div>
-                <div class="form-group">
-                    <label>Confirm Password</label>
-                    <input type="password" id="signupPassword2" placeholder="••••••••" autocomplete="new-password">
-                </div>
+                <div class="form-group"><label>Password</label><input type="password" id="signupPassword"></div>
+                <div class="form-group"><label>Confirm</label><input type="password" id="signupPassword2"></div>
             </div>
-
             <div class="form-group" id="supervisorCodeGroup" style="display:none;">
-                <label id="supervisorCodeLabel">Invite Code</label>
-                <input type="text" id="supervisorCode" placeholder="Enter the invite code given by your admin">
+                <label id="supervisorCodeLabel">Invite Code</label><input type="text" id="supervisorCode">
             </div>
-
             <button class="btn-primary" onclick="handleSignup()">Create Account</button>
             <div class="auth-msg" id="signupMsg"></div>
-
-            <div class="auth-hint">
-                Agent sign-up only succeeds if your email already appears on the roster a Quality account has uploaded. Team Leader and Quality accounts need an invite code from your admin (defaults: <code>PLDT-TL-2026</code> / <code>PLDT-QA-2026</code> — change these in <code>script.js</code> before real use).
-            </div>
         </div>
     </div>
 </div>
 
-<!-- ============ APP SCREEN ============ -->
 <div id="appScreen">
     <div class="app-body">
-
-        <!-- ===== SUPERVISOR VIEW ===== -->
         <div class="sidebar" id="supervisorSidebar" style="display:none;">
             <div class="filters-panel">
                 <div class="filters-panel-head">
                     <span>🔎 Filters</span>
                     <button type="button" class="filters-reset" onclick="resetFilters()">Reset</button>
                 </div>
-
-                <div class="filter-field">
-                    <label>Form Type</label>
-                    <div class="select-wrap">
-                        <select id="selectFormType" onchange="filterData()"><option value="ALL">(All Form Types)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>LOB</label>
-                    <div class="select-wrap">
-                        <select id="selectBrand" onchange="filterData()"><option value="ALL">(All LOB)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Month</label>
-                    <div class="select-wrap">
-                        <select id="selectMonth" onchange="filterData()"><option value="ALL">(All Months)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Weekending</label>
-                    <div class="select-wrap">
-                        <select id="selectWeekending" onchange="filterData()"><option value="ALL">(All Weekending)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Agent Tenure</label>
-                    <div class="select-wrap">
-                        <select id="selectTenure" onchange="filterData()"><option value="ALL">(All Tenures)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Team Leader</label>
-                    <div class="select-wrap">
-                        <select id="selectTeamLeader" onchange="filterData()"><option value="ALL">(All Team Leaders)</option></select>
-                    </div>
-                </div>
+                <div class="filter-field"><label>Form Type</label><div class="select-wrap"><select id="selectFormType" onchange="filterData()"><option value="ALL">(All)</option></select></div></div>
+                <div class="filter-field"><label>LOB</label><div class="select-wrap"><select id="selectBrand" onchange="filterData()"><option value="ALL">(All)</option></select></div></div>
+                <div class="filter-field"><label>Month</label><div class="select-wrap"><select id="selectMonth" onchange="filterData()"><option value="ALL">(All)</option></select></div></div>
+                <div class="filter-field"><label>Weekending</label><div class="select-wrap"><select id="selectWeekending" onchange="filterData()"><option value="ALL">(All)</option></select></div></div>
+                <div class="filter-field"><label>Agent Tenure</label><div class="select-wrap"><select id="selectTenure" onchange="filterData()"><option value="ALL">(All)</option></select></div></div>
+                <div class="filter-field"><label>Team Leader</label><div class="select-wrap"><select id="selectTeamLeader" onchange="filterData()"><option value="ALL">(All)</option></select></div></div>
             </div>
-
-            <div class="sidebar-top-row">
-                <button class="upload-icon-btn" id="uploadIconBtn" onclick="toggleUploadPanel()" title="Upload / manage data">📁<span class="upload-icon-label">Data</span></button>
-            </div>
-
+            <button class="upload-icon-btn" id="uploadIconBtn" onclick="toggleUploadPanel()">📁<span class="upload-icon-label">Data Management</span></button>
             <div class="upload-popover" id="uploadPopover" style="display:none;">
                 <div class="upload-section">
                     <h4>1. Agent Roster</h4>
-                    <div class="upload-btn-wrapper">
-                        <button class="btn-upload">📇 Upload Roster (Email/Name/ID)</button>
-                        <input type="file" id="rosterFileInput" accept=".csv,.xlsx,.xls" onchange="handleRosterUpload(event)">
-                    </div>
-                    <div class="file-status" id="rosterStatus">No roster loaded yet.</div>
+                    <input type="file" accept=".csv,.xlsx,.xls" onchange="handleRosterUpload(event)">
+                    <div class="file-status" id="rosterStatus">No roster loaded.</div>
                 </div>
-
                 <div class="upload-section">
                     <h4>2. Raw Audit Data</h4>
-                    <div class="upload-btn-wrapper">
-                        <button class="btn-upload">📁 Upload Raw Data</button>
-                        <input type="file" id="dataFileInput" accept=".csv,.xlsx,.xls" onchange="handleDataUpload(event)">
-                    </div>
-                    <div class="file-status" id="dataStatus">No audit data loaded yet.</div>
-                    <button class="btn-upload" style="background:#1a1a1a;border-color:#1a1a1a;" onclick="resyncAgentEmails()">🔄 Re-sync Agent Matching</button>
-                    <div class="file-status" id="resyncStatus">Use this if agents uploaded/updated after data was already loaded, or if an agent can't see rows that should be theirs.</div>
+                    <input type="file" accept=".csv,.xlsx,.xls" onchange="handleDataUpload(event)">
+                    <div class="file-status" id="dataStatus">No audit data loaded.</div>
                 </div>
             </div>
         </div>
 
         <div class="dashboard-canvas" id="supervisorView" style="display:none;">
+            <!-- Top Summary Tables matching reference image layout -->
             <div class="tables-grid">
                 <div class="card-table">
                     <h3>Pass Rate %</h3>
                     <table class="excel-table">
-                        <thead><tr><th>Row Labels</th><th>PASSED</th><th>FAILED</th><th>Total</th></tr></thead>
-                        <tbody>
-                            <tr class="total-row">
-                                <td>Grand Total</td>
-                                <td id="totalPassRateVal">-</td>
-                                <td id="totalFailRateVal">-</td>
-                                <td>100%</td>
-                            </tr>
-                        </tbody>
+                        <thead><tr><th>Row Labels</th><th>Passed</th><th>Failed</th><th>Total</th></tr></thead>
+                        <tbody id="passRateTableBody"></tbody>
                     </table>
                 </div>
                 <div class="card-table">
-                    <h3>Number of Audits (by Tenure)</h3>
+                    <h3>Number of Audits</h3>
                     <table class="excel-table">
-                        <thead><tr><th>Row Labels</th><th>0-30</th><th>31-90</th><th>&gt;91 Days</th><th>Total</th></tr></thead>
-                        <tbody>
-                            <tr class="total-row">
-                                <td>Grand Total</td>
-                                <td id="totalAuditNhip">-</td>
-                                <td id="totalAudit31">-</td>
-                                <td id="totalAudit91">-</td>
-                                <td id="totalAuditTotal">-</td>
-                            </tr>
-                        </tbody>
+                        <thead><tr><th>LOB</th><th>0-30</th><th>31-60</th><th>61-90</th><th>>91</th><th>Total</th></tr></thead>
+                        <tbody id="auditCountTableBody"></tbody>
                     </table>
                 </div>
                 <div class="card-table">
-                    <h3>Average QA Scores (by Tenure)</h3>
+                    <h3>Average QA Scores</h3>
                     <table class="excel-table">
-                        <thead><tr><th>Row Labels</th><th>0-30</th><th>31-90</th><th>&gt;91 Days</th><th>Total</th></tr></thead>
-                        <tbody>
-                            <tr class="total-row">
-                                <td>Grand Total</td>
-                                <td id="totalAvgNhip">-</td>
-                                <td id="totalAvg31">-</td>
-                                <td id="totalAvg91">-</td>
-                                <td id="totalAvgTotal">-</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                <div class="card-table">
-                    <h3>CM Distribution</h3>
-                    <table class="excel-table">
-                        <thead><tr><th>Superstar</th><th>Underperformer</th></tr></thead>
-                        <tbody>
-                            <tr class="total-row">
-                                <td id="cmSuperstarVal">-</td>
-                                <td id="cmUnderperformerVal">-</td>
-                            </tr>
-                        </tbody>
+                        <thead><tr><th>LOB</th><th>0-30</th><th>31-60</th><th>61-90</th><th>>91</th><th>Total</th></tr></thead>
+                        <tbody id="avgScoreTableBody"></tbody>
                     </table>
                 </div>
             </div>
 
+            <!-- Charts Row -->
             <div class="charts-row-1">
-                <div class="chart-box" style="position: relative; min-height: 280px;">
-                    <div class="chart-title">Score per LOB</div>
-                    <div class="chart-canvas-wrapper" style="position: relative; flex: 1; width: 100%; height: 100%;">
-                        <canvas id="lobChartCanvas"></canvas>
-                    </div>
+                <div class="chart-box">
+                    <div class="chart-title">Average Scores Per LOB</div>
+                    <canvas id="lobChartCanvas"></canvas>
                 </div>
                 <div class="chart-box">
-                    <div class="chart-title">Scores Per Team Leader</div>
-                    <div class="horizontal-chart" id="leaderChart">
-                        <div class="empty-note">Upload data to populate.</div>
-                    </div>
+                    <div class="chart-title">Team Level Scores</div>
+                    <div class="horizontal-chart" id="leaderChart"></div>
                 </div>
             </div>
 
-            <div class="chart-box" style="min-height:200px;">
-                <div class="chart-title">Top Hit Parameters (All Agents)</div>
-                <table class="excel-table hitlist-table" id="topHitsTable">
-                    <thead><tr><th style="width:60%;">Parameter</th><th>Category</th><th>Times Hit</th></tr></thead>
-                    <tbody><tr><td colspan="3" class="empty-note">Upload data to populate.</td></tr></tbody>
-                </table>
+            <div class="charts-row-1" style="margin-top: 12px;">
+                <div class="chart-box">
+                    <div class="chart-title">Site Comparison (On-Site vs WFH)</div>
+                    <canvas id="siteChartCanvas"></canvas>
+                </div>
             </div>
         </div>
 
-        <!-- ===== AGENT VIEW ===== -->
         <div id="agentView">
-            <div class="agent-welcome">
-                <h2 id="agentWelcomeName">Welcome</h2>
-                <p id="agentWelcomeSub">Here is your Genuine Care Audit performance summary.</p>
-            </div>
-
-            <div id="agentEmptyState" class="empty-agent-data" style="display:none;">
-                No audits have been recorded against your name yet. Once your supervisor uploads new audit data, your scores will appear here automatically.
-            </div>
-
+            <div class="agent-welcome"><h2 id="agentWelcomeName">Welcome</h2></div>
+            <div id="agentEmptyState" class="empty-agent-data" style="display:none;">No audits recorded against your name yet.</div>
             <div id="agentContent" style="display:none; flex-direction:column; gap:16px;">
                 <div class="scorecard-grid" id="agentScorecard"></div>
-
-                <div class="agent-section">
-                    <h3>Your Audits &amp; What Was Flagged</h3>
-                    <div id="agentAuditList"></div>
-                </div>
             </div>
         </div>
-
     </div>
-
 </div>
 
 </body>
