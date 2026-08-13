@@ -656,11 +656,27 @@ async function handleDataUpload(event) {
           UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
           TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
 
+          // Normalization: convert various score formats to percent
           ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'].forEach(k => {
             let raw = out[k];
             if (typeof raw === 'string') raw = raw.replace('%', '').replace(',', '').trim();
-            const n = parseFloat(raw);
-            out[k] = isNaN(n) ? null : (n <= 1 ? Math.round(n * 100) : Math.round(n));
+            let n = parseFloat(raw);
+            if (isNaN(n)) {
+              out[k] = null;
+              return;
+            }
+            // Normalize common score ranges to percent:
+            // - 0..1  => fraction (e.g. 0.85) -> 85%
+            // - >1..10 => score-out-of-10 (e.g. 7) -> 70%
+            // - >10 => already percent (e.g. 70 or 85) -> keep as-is
+            if (n <= 1) {
+              n = n * 100;
+            } else if (n > 1 && n <= 10) {
+              n = n * 10;
+            } else {
+              n = n;
+            }
+            out[k] = Math.round(n);
           });
 
           out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
