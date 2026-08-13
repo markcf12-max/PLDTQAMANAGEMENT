@@ -567,160 +567,206 @@ async function resyncAgentEmails() {
     }
 }
 
+const SOURCE_FIELD_ALIASES = {
+    'Start time': ['Start time', 'START TIME'],
+    'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?': [
+        'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?',
+        'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL? - HIDDEN',
+        'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL? -HIDDEN'
+    ],
+    'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER?': [
+        'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER?',
+        'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER? - HIDDEN',
+        'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER? -HIDDEN'
+    ],
+    'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES': [
+        'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES',
+        'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES - HIDDEN',
+        'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES -HIDDEN'
+    ]
+};
+
+const SCORE_SOURCE_FIELDS = [
+    'IS THIS A POTENTIAL CUSTOMER MISTREAT?',
+    'IRRELEVANT SOLUTION', 'INCOMPLETE SOLUTION', 'UNTIMELY SOLUTION ( ZTP)', 'UNCLEAR SOLUTION',
+    'Poor Listening Skills?', 'Customer Validation and Empathy Gap?',
+    'Did not adjust the tone/pace to match the customer?',
+    'Did not adjust to the customers language?',
+    'Negative Words, Phrasing and Limitations?',
+    'Unfriendly/discourteous/sarcastic?', 'Sounded transactional or robotic?',
+    'FAST: Were there other Agent factors observed that affected the customer experience?',
+    'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?',
+    'DID WE FOLLOW THE DATA PRIVACY POLICY?',
+    'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?',
+    'DID WE FOLLOW THE CSAT/NPS PROCESS?',
+    'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?',
+    'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?',
+    'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?',
+    'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER?',
+    'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES'
+];
+
 const NEEDED_FIELDS = [
-    'ID', 'FORM TYPE', 'BRAND', 'LINE OF BUSINESS', 'AGENT/OFFICER NAME', 'AGENT TENURE',
+    'ID', 'Start time', 'FORM TYPE', 'BRAND', 'LINE OF BUSINESS', 'AGENT/OFFICER NAME', 'AGENT TENURE',
     'TEAM LEADER', 'CLUSTER', 'WEEKENDING', 'MONTH', 'MISTREAT',
     'RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE',
-    'EE number/ID number', 'OVERALL PASSRATE', 'CM',
+    'EE number/ID number', 'OVERALL PASSRATE', 'CM', 'PASSRATE CM',
     'RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS'
-].concat(HIT_PARAMS.map(p => p.col));
+].concat(HIT_PARAMS.map(p => p.col), SCORE_SOURCE_FIELDS);
+
+function sourceCandidates(field) {
+    return SOURCE_FIELD_ALIASES[field] || [field];
+}
+
+function isExactNoOpportunity(value) {
+    return normVal(value) === 'NO OPPORTUNITY';
+}
+
+function scoreBinaryNoOpportunity(row, fields) {
+    return fields.every(f => isExactNoOpportunity(row[f])) ? 1 : 0;
+}
+
+function scoreFast(value) {
+    const allowed = new Set([
+        'NO OPPORTUNITY',
+        'UNTIMELY RESPONSE WITH NEGATIVE CX - WITHIN THRESHOLD',
+        'UNTIMELY RESPONSE DUE TO KNOWLEDGE ISSUE/GAP',
+        'UNTIMELY RESPONSE DUE TO COMPLEX ISSUES',
+        'UNTIMELY RESPONSE DUE TO TOOLS ISSUE'
+    ]);
+    return allowed.has(normVal(value)) ? 1 : 0;
+}
+
+function scoreSafeSecure(row) {
+    const fields = [
+        'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?',
+        'DID WE FOLLOW THE DATA PRIVACY POLICY?',
+        'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?',
+        'DID WE FOLLOW THE CSAT/NPS PROCESS?',
+        'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?',
+        'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?',
+        'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?',
+        'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER?',
+        'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES'
+    ];
+    const applicable = fields.map(f => normVal(row[f])).filter(v => v && v !== 'NA' && v !== 'N/A');
+    if (!applicable.length) return 1;
+    return applicable.filter(v => v === 'YES').length / applicable.length;
+}
+
+function parseUploadDate(value) {
+    if (value instanceof Date && !isNaN(value)) return value;
+    if (typeof value === 'number' && isFinite(value)) {
+        const parts = XLSX.SSF.parse_date_code(value);
+        return parts ? new Date(parts.y, parts.m - 1, parts.d) : null;
+    }
+    const text = String(value || '').trim();
+    if (!text) return null;
+    const parsed = new Date(text);
+    return isNaN(parsed) ? null : parsed;
+}
+
+function deriveWeekendingAndMonth(startValue) {
+    const d = parseUploadDate(startValue);
+    if (!d) return { weekending: '', month: '' };
+    const result = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const mondayBasedDay = (result.getDay() + 6) % 7;
+    result.setDate(result.getDate() + (6 - mondayBasedDay));
+    const mm = String(result.getMonth() + 1).padStart(2, '0');
+    const dd = String(result.getDate()).padStart(2, '0');
+    const month = d.toLocaleString('en-US', { month: 'long' }).toUpperCase();
+    return { weekending: 'WE' + mm + dd, month };
+}
+
+function calculateGenuineCareScores(row) {
+    const noMistreat = normVal(row['IS THIS A POTENTIAL CUSTOMER MISTREAT?']) === 'NO';
+    const reliableRaw = scoreBinaryNoOpportunity(row, [
+        'IRRELEVANT SOLUTION', 'INCOMPLETE SOLUTION', 'UNTIMELY SOLUTION ( ZTP)', 'UNCLEAR SOLUTION'
+    ]);
+    const personableRaw = scoreBinaryNoOpportunity(row, [
+        'Poor Listening Skills?', 'Customer Validation and Empathy Gap?',
+        'Did not adjust the tone/pace to match the customer?',
+        'Did not adjust to the customers language?', 'Negative Words, Phrasing and Limitations?',
+        'Unfriendly/discourteous/sarcastic?', 'Sounded transactional or robotic?'
+    ]);
+    const reliable = noMistreat && reliableRaw === 1 ? 1 : 0;
+    const personable = noMistreat && personableRaw === 1 ? 1 : 0;
+    const fast = scoreFast(row['FAST: Were there other Agent factors observed that affected the customer experience?']);
+    const safe = noMistreat ? scoreSafeSecure(row) : 0;
+    const overall = (reliable * 0.45) + (personable * 0.45) + (fast * 0.05) + (safe * 0.05);
+    const overallPct = Math.round(overall * 10000) / 100;
+    const cluster = overall >= 0.95 ? 'A' : overall >= 0.90 ? 'B' : overall >= 0.80 ? 'C' : 'D';
+    const cm = overall >= 0.95 ? 'SUPERSTAR' : overall >= 0.90 ? 'PERFORMER' : overall >= 0.80 ? 'LAGGARD' : 'UNDERPERFORMER';
+    const passrateCm = overall >= 0.90 ? 'SUPERSTAR' : overall >= 0.80 ? 'PERFORMER' : overall >= 0.70 ? 'LAGGARD' : 'UNDERPERFORMER';
+    return {
+        'MISTREAT': noMistreat ? 100 : 0,
+        'RELIABLE': reliable * 100,
+        'PERSONABLE': personable * 100,
+        'FAST': fast * 100,
+        'SAFE & SECURE': Math.round(safe * 10000) / 100,
+        'OVERALL SCORE': overallPct,
+        'CLUSTER': cluster,
+        'CM': cm,
+        'PASSRATE CM': passrateCm,
+        'OVERALL PASSRATE': overall >= 0.90 ? 'PASSED' : 'FAILED'
+    };
+}
 
 async function handleDataUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
     const dataStatus = document.getElementById('dataStatus');
     if (dataStatus) dataStatus.textContent = 'Processing ' + file.name + '...';
-
     try {
-        const rows = await parseWorkbookFile(file, ['RAW', 'DATA']);
+        const rows = await parseWorkbookFile(file, ['RAW', 'DATA', 'SHEET1']);
         if (!rows.length) throw new Error('Data file appears empty.');
-
-        // --- header detection + mapping (robust) ---
         const headerMap = {};
         NEEDED_FIELDS.forEach(f => {
-          const h = findHeader(rows[0], [f]);
-          if (h) headerMap[f] = h;
+            const h = findHeader(rows[0], sourceCandidates(f));
+            if (h) headerMap[f] = h;
         });
+        const required = ['AGENT/OFFICER NAME', 'IS THIS A POTENTIAL CUSTOMER MISTREAT?'];
+        const missing = required.filter(f => !headerMap[f]);
+        if (missing.length) throw new Error('Missing required raw-data column(s): ' + missing.join(', '));
 
-        const sampleKeys = Object.keys(rows[0] || {});
-
-        function findByPatterns(patterns) {
-          return sampleKeys.find(k => patterns.some(p => new RegExp(p, 'i').test(k)));
-        }
-
-        // common variants to search for
-        const scoreCandidates = [
-          'OVERALL\\s*SCORE', 'OVERALL_SCORE', '^SCORE$', 'TOTAL\\s*SCORE', 'OVERALL', 'FINAL\\s*SCORE', 'SCORE\\s*\\(\\%\\)', 'SCORE\\s*%','OVERALL SCORE \\(\\%\\)'
-        ];
-        const passRateCandidates = [
-          'OVERALL\\s*PASSRATE', 'PASSRATE', 'PASS RATE', 'PASS_STATUS', 'PASSED', 'OVERALL PASS', 'PASS'
-        ];
-
-        let detectedScoreKey = headerMap['OVERALL SCORE'] || findByPatterns(scoreCandidates);
-        // fallback: find any key where at least one sample row has a numeric value
-        if (!detectedScoreKey) {
-          detectedScoreKey = sampleKeys.find(k => {
-            return rows.some(r => {
-              const v = r[k];
-              return v !== '' && !isNaN(parseFloat(String(v).replace(/%/g, '').replace(',', '')));
-            });
-          });
-        }
-
-        let detectedPassKey = headerMap['OVERALL PASSRATE'] || findByPatterns(passRateCandidates);
-
-        // log detection
-        console.log('Detected keys -> score:', detectedScoreKey, 'passrate:', detectedPassKey);
-
-        // ensure headerMap has entries for the expected names so downstream code works
-        if (detectedScoreKey) headerMap['OVERALL SCORE'] = detectedScoreKey;
-        if (detectedPassKey) headerMap['OVERALL PASSRATE'] = detectedPassKey;
-        // --- end detection ---
-
-        // ---- process rows into canonical fields (same as before, using headerMap) ----
         const rosterSnap = await getDocs(collection(db, 'roster'));
         const nameToEmail = {};
         rosterSnap.forEach(d => {
-          const data = d.data();
-          nameToEmail[normalizeName(data.agentName)] = d.id;
+            const data = d.data();
+            nameToEmail[normalizeName(data.agentName)] = d.id;
         });
-
-        const UPPERCASE_FIELDS = ['FORM TYPE', 'MONTH', 'AGENT TENURE', 'OVERALL PASSRATE', 'CM'];
-        const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER', 'CLUSTER', 'WEEKENDING'];
-
+        const UPPERCASE_FIELDS = ['FORM TYPE', 'AGENT TENURE'];
+        const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER'];
+        let calculatedCount = 0;
         const processed = rows.map(r => {
-          const out = {};
-          NEEDED_FIELDS.forEach(f => {
-            const h = headerMap[f];
-            out[f] = h ? r[h] : '';
-          });
+            const out = {};
+            NEEDED_FIELDS.forEach(f => {
+                const h = headerMap[f];
+                out[f] = h ? r[h] : '';
+            });
+            UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
+            TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
 
-          // If detectedScoreKey exists and original header wasn't matched, copy into canonical field
-          if (detectedScoreKey && !out['OVERALL SCORE']) {
-            out['OVERALL SCORE'] = r[detectedScoreKey] || '';
-          }
-          if (detectedPassKey && !out['OVERALL PASSRATE']) {
-            out['OVERALL PASSRATE'] = r[detectedPassKey] || '';
-          }
+            const derived = calculateGenuineCareScores(out);
+            Object.assign(out, derived);
+            const period = deriveWeekendingAndMonth(out['Start time']);
+            if (period.weekending) out['WEEKENDING'] = period.weekending;
+            if (period.month) out['MONTH'] = period.month;
+            calculatedCount++;
 
-          UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
-          TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
-
-          // Normalization: convert various score formats to percent
-          ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'].forEach(k => {
-            let raw = out[k];
-            if (typeof raw === 'string') raw = raw.replace('%', '').replace(',', '').trim();
-            let n = parseFloat(raw);
-            if (isNaN(n)) {
-              out[k] = null;
-              return;
-            }
-            // Normalize common score ranges to percent:
-            // - 0..1  => fraction (e.g. 0.85) -> 85%
-            // - >1..10 => score-out-of-10 (e.g. 7) -> 70%
-            // - >10 => already percent (e.g. 70 or 85) -> keep as-is
-            if (n <= 1) {
-              n = n * 100;
-            } else if (n > 1 && n <= 10) {
-              n = n * 10;
-            } else {
-              n = n;
-            }
-            out[k] = Math.round(n);
-          });
-
-          out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
-          return out;
-        }).filter(r => r['AGENT/OFFICER NAME']);
-
-        // --- diagnostics: parsed headers and preview ---
-        console.log('Parsed headers:', Object.keys(rows[0] || {}));
-        console.log('handleDataUpload — processed rows:', processed.length, processed[0] || null);
-
+            out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
+            return out;
+        }).filter(r => String(r['AGENT/OFFICER NAME'] || '').trim());
         await replaceAuditData(processed);
-
         cachedAuditRows = processed;
-
-        // expose cache for debugging in Console:
-        window.__cachedAuditRows = cachedAuditRows;
-
-        // quick check that cache was set
-        console.log('cachedAuditRows length', cachedAuditRows.length);
-
-        // pass diagnostic (uses same logic as UI)
-        const passDiag = (() => {
-            const rowsArr = window.__cachedAuditRows || [];
-            const isPassed = r => {
-                const passrate = r['OVERALL PASSRATE'];
-                if (passrate && String(passrate).trim().toUpperCase()) {
-                    return String(passrate).trim().toUpperCase() === 'PASSED';
-                }
-                const score = r['OVERALL SCORE'];
-                return (typeof score === 'number' ? score : parseFloat(score || 0)) >= 85;
-            };
-            const passed = rowsArr.filter(isPassed).length;
-            return { passed, total: rowsArr.length, passPct: rowsArr.length ? Math.round((passed/rowsArr.length)*100) : 0 };
-        })();
-        console.log('handleDataUpload — pass diagnostic:', passDiag);
-
-        if (dataStatus) dataStatus.innerHTML = `✅ Successfully uploaded ${processed.length} audit records.`;
-        
+        if (dataStatus) dataStatus.innerHTML = `✅ Uploaded ${processed.length} audit records and automatically calculated ${calculatedCount} scores. Extra raw-file columns were ignored.`;
         populateDropdownOptions(processed);
-        // ensure UI shows the full newly uploaded dataset
-        resetFilters();
+        filterData();
     } catch (err) {
-        console.error("Data Upload Failed:", err);
-        if (dataStatus) dataStatus.innerHTML = `⚠️ Upload failed: ${err.message}`;
+        console.error('Data Upload Failed:', err);
+        if (dataStatus) dataStatus.innerHTML = `⚠️ Upload failed: ${escapeHtml(err.message)}`;
+    } finally {
+        event.target.value = '';
     }
 }
 
@@ -736,21 +782,12 @@ function populateDropdownOptions(rows) {
         selectTenure: 'AGENT TENURE',
         selectTeamLeader: 'TEAM LEADER'
     };
-
     Object.entries(map).forEach(([selId, field]) => {
         const sel = document.getElementById(selId);
         if (!sel) return;
         const current = sel.value;
-
-        let uniques;
-        if (field === 'LINE OF BUSINESS') {
-            // For LOB prefer LINE OF BUSINESS, otherwise fall back to BRAND
-            uniques = [...new Set(rows.map(r => (String(r['LINE OF BUSINESS'] || r['BRAND'] || '')).trim()).filter(Boolean))].sort();
-        } else {
-            uniques = [...new Set(rows.map(r => String(r[field] || '').trim()).filter(Boolean))].sort();
-        }
-
-        sel.innerHTML = `<option value="ALL">(All)</option>` + uniques.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        const uniques = [...new Set(rows.map(r => r[field] || r['BRAND']).filter(Boolean))].sort();
+        sel.innerHTML = `<option value="ALL">(All)</option>` + uniques.map(v => `<option value="${v}">${v}</option>`).join('');
         if (uniques.includes(current)) sel.value = current;
     });
 }
