@@ -18,6 +18,7 @@ const TEAM_LEADER_INVITE_CODE = 'PLDT-TL-2026';
 const QUALITY_INVITE_CODE = 'PLDT-QA-2026'; 
 
 let lobChartInstance = null;
+let siteChartInstance = null;
 
 /* ==========================================================================
    FIRESTORE BATCH HELPERS (Concurrent Writes)
@@ -58,7 +59,6 @@ async function replaceAuditData(rows) {
     const metaSnap = await getDoc(metaRef);
     const prevCount = metaSnap.exists() ? (metaSnap.data().count || 0) : 0;
 
-    // Concurrent Deletion
     const deletePromises = [];
     for (let i = 0; i < prevCount; i += 400) {
         const end = Math.min(i + 400, prevCount);
@@ -68,7 +68,6 @@ async function replaceAuditData(rows) {
     }
     await Promise.all(deletePromises);
 
-    // Concurrent Insertion
     const setPromises = [];
     for (let i = 0; i < rows.length; i += 400) {
         const chunk = rows.slice(i, i + 400);
@@ -84,7 +83,7 @@ async function replaceAuditData(rows) {
 /* ==========================================================================
    SESSION & STATE
    ========================================================================== */
-let currentSession = null; // { uid, email, role, agentName, agentId }
+let currentSession = null; 
 let cachedAuditRows = [];
 
 function getNormalizedRole(roleStr) {
@@ -157,12 +156,7 @@ async function handleSignup() {
             const code = codeEl ? codeEl.value.trim() : '';
             if (code !== requiredCode) return showAuthMsg('signupMsg', 'Invalid invite code.', false);
 
-            let cred;
-            try {
-                cred = await createUserWithEmailAndPassword(auth, email, pw);
-            } catch (err) {
-                return showAuthMsg('signupMsg', friendlyAuthError(err), false);
-            }
+            let cred = await createUserWithEmailAndPassword(auth, email, pw);
             await setDoc(doc(db, 'users', cred.user.uid), { email, role: signupRole });
             await signOut(auth);
             showAuthMsg('signupMsg', `${signupRole === 'team_leader' ? 'Team Leader' : 'Quality'} account created. Log in now.`, true);
@@ -171,35 +165,26 @@ async function handleSignup() {
             return;
         }
 
-        let cred;
-        try {
-            cred = await createUserWithEmailAndPassword(auth, email, pw);
-        } catch (err) {
-            return showAuthMsg('signupMsg', friendlyAuthError(err), false);
+        let cred = await createUserWithEmailAndPassword(auth, email, pw);
+        const rosterSnap = await getDoc(doc(db, 'roster', email));
+        if (!rosterSnap.exists()) {
+            await deleteUser(cred.user);
+            return showAuthMsg('signupMsg', 'Email not on agent roster. Ask supervisor to add you first.', false);
         }
+        const match = rosterSnap.data();
 
-        try {
-            const rosterSnap = await getDoc(doc(db, 'roster', email));
-            if (!rosterSnap.exists()) {
-                await deleteUser(cred.user);
-                return showAuthMsg('signupMsg', 'Email not on agent roster. Ask supervisor to add you first.', false);
-            }
-            const match = rosterSnap.data();
-
-            await setDoc(doc(db, 'users', cred.user.uid), {
-                email,
-                role: 'agent',
-                agentName: match.agentName,
-                agentId: match.agentId || ''
-            });
-            await signOut(auth);
-            showAuthMsg('signupMsg', `Account created & matched to "${match.agentName}". You can log in now.`, true);
-            clearSignupForm();
-            setTimeout(() => switchAuthTab('login'), 1200);
-        } catch (err) {
-            try { await deleteUser(cred.user); } catch (e2) {}
-            showAuthMsg('signupMsg', friendlyAuthError(err), false);
-        }
+        await setDoc(doc(db, 'users', cred.user.uid), {
+            email,
+            role: 'agent',
+            agentName: match.agentName,
+            agentId: match.agentId || ''
+        });
+        await signOut(auth);
+        showAuthMsg('signupMsg', `Account created & matched to "${match.agentName}". You can log in now.`, true);
+        clearSignupForm();
+        setTimeout(() => switchAuthTab('login'), 1200);
+    } catch (err) {
+        showAuthMsg('signupMsg', friendlyAuthError(err), false);
     } finally {
         authFlowInProgress = false;
     }
@@ -215,17 +200,13 @@ function clearSignupForm() {
 async function quickAccess(role) {
     const email = prompt(`Enter ${role.replace('_', ' ')} email:`);
     const password = prompt("Enter password:");
-
     if (!email || !password) return;
 
     authFlowInProgress = true;
     try {
         const cred = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
         const profileSnap = await getDoc(doc(db, 'users', cred.user.uid));
-        
-        if (!profileSnap.exists()) {
-            return showAuthMsg('loginMsg', 'No user profile document found in Firestore for this account.', false);
-        }
+        if (!profileSnap.exists()) return showAuthMsg('loginMsg', 'No user profile found.', false);
         currentSession = { uid: cred.user.uid, ...profileSnap.data() };
         await enterApp();
     } catch (err) {
@@ -249,11 +230,9 @@ async function handleLogin() {
         const profileSnap = await getDoc(doc(db, 'users', cred.user.uid));
         if (!profileSnap.exists()) {
             await signOut(auth);
-            return showAuthMsg('loginMsg', 'No user profile found in database (/users/' + cred.user.uid + ').', false);
+            return showAuthMsg('loginMsg', 'No user profile found.', false);
         }
         currentSession = { uid: cred.user.uid, ...profileSnap.data() };
-        if (emailEl) emailEl.value = '';
-        if (pwEl) pwEl.value = '';
         await enterApp();
     } catch (err) {
         showAuthMsg('loginMsg', friendlyAuthError(err), false);
@@ -262,101 +241,55 @@ async function handleLogin() {
     }
 }
 
-function logout() {
-    signOut(auth);
-}
+function logout() { signOut(auth); }
 
 function friendlyAuthError(err) {
     const code = err && err.code ? err.code : '';
     if (code.includes('email-already-in-use')) return 'An account with this email already exists.';
     if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')) return 'Incorrect email or password.';
-    if (code.includes('weak-password')) return 'Password must be at least 6 characters.';
-    if (code.includes('invalid-email')) return 'Enter a valid email address.';
     return 'Authentication error: ' + (err && err.message ? err.message : 'Please try again.');
 }
 
 function resetToLoggedOutState() {
     currentSession = null;
     cachedAuditRows = [];
-
-    const appScreen = document.getElementById('appScreen');
-    const authScreen = document.getElementById('authScreen');
-    const sessionChip = document.getElementById('sessionChip');
-
-    if (appScreen) appScreen.style.display = 'none';
-    if (authScreen) authScreen.style.display = 'flex';
-    if (sessionChip) sessionChip.style.display = 'none';
-
+    document.getElementById('appScreen').style.display = 'none';
+    document.getElementById('authScreen').style.display = 'flex';
+    document.getElementById('sessionChip').style.display = 'none';
     clearSignupForm();
     switchAuthTab('login');
 }
 
 onAuthStateChanged(auth, async (user) => {
     if (authFlowInProgress) return;
-
-    if (!user) {
-        resetToLoggedOutState();
-        return;
-    }
-
+    if (!user) { resetToLoggedOutState(); return; }
     try {
         const profileSnap = await getDoc(doc(db, 'users', user.uid));
-        if (!profileSnap.exists()) {
-            console.error(`User authenticated (${user.uid}), but no user record in /users collection.`);
-            await signOut(auth);
-            return;
-        }
+        if (!profileSnap.exists()) { await signOut(auth); return; }
         currentSession = { uid: user.uid, ...profileSnap.data() };
         await enterApp();
-    } catch (err) {
-        console.error("Auth state error:", err);
-    }
+    } catch (err) { console.error(err); }
 });
 
 async function enterApp() {
     if (!currentSession) return;
+    document.getElementById('authScreen').style.display = 'none';
+    document.getElementById('appScreen').style.display = 'flex';
+    document.getElementById('sessionChip').style.display = 'flex';
 
-    const appScreen = document.getElementById('appScreen');
-    const authScreen = document.getElementById('authScreen');
-    const sessionChip = document.getElementById('sessionChip');
-    const sessionLabel = document.getElementById('sessionLabel');
+    const normRole = getNormalizedRole(currentSession.role);
+    const canViewDashboard = ['quality', 'team_leader', 'supervisor'].includes(normRole);
+    const canUpload = ['quality', 'supervisor'].includes(normRole);
 
-    if (authScreen) authScreen.style.display = 'none';
-    if (appScreen) appScreen.style.display = 'flex';
-    if (sessionChip) sessionChip.style.display = 'flex';
-
-    const normalizedRole = getNormalizedRole(currentSession.role);
-    const roleLabels = { quality: '👤 Quality · ', team_leader: '👤 Team Leader · ', supervisor: '👤 Quality · ', agent: '👤 Agent · ' };
-    
-    if (sessionLabel) {
-        sessionLabel.textContent = (roleLabels[normalizedRole] || '👤 ') + currentSession.email;
-    }
-
-    const canViewDashboard = ['quality', 'team_leader', 'supervisor'].includes(normalizedRole);
-    const canUpload = ['quality', 'supervisor'].includes(normalizedRole);
-
-    const supervisorSidebar = document.getElementById('supervisorSidebar');
-    const supervisorView = document.getElementById('supervisorView');
-    const agentView = document.getElementById('agentView');
-    const uploadIconBtn = document.getElementById('uploadIconBtn');
-
-    if (supervisorSidebar) supervisorSidebar.style.display = canViewDashboard ? 'flex' : 'none';
-    if (supervisorView) supervisorView.style.display = canViewDashboard ? 'flex' : 'none';
-    if (agentView) agentView.style.display = canViewDashboard ? 'none' : 'flex';
-    if (uploadIconBtn) uploadIconBtn.style.display = canUpload ? 'flex' : 'none';
+    document.getElementById('supervisorSidebar').style.display = canViewDashboard ? 'flex' : 'none';
+    document.getElementById('supervisorView').style.display = canViewDashboard ? 'flex' : 'none';
+    document.getElementById('agentView').style.display = canViewDashboard ? 'none' : 'flex';
+    document.getElementById('uploadIconBtn').style.display = canUpload ? 'flex' : 'none';
 
     if (canViewDashboard) {
         if (canUpload) await refreshRosterStatus();
         const rows = await loadAllAuditData();
-        console.log(`Loaded ${rows.length} rows for Supervisor view.`);
-        
-        const dataStatus = document.getElementById('dataStatus');
-        if (dataStatus) {
-            dataStatus.innerHTML = rows.length 
-                ? `✅ ${rows.length} audit rows loaded.` 
-                : `⚠️ 0 rows in auditData collection. Use the upload button to import data.`;
-        }
-        
+        document.getElementById('dataStatus').innerHTML = rows.length ? `✅ ${rows.length} audit rows loaded.` : `⚠️ 0 rows in database.`;
         populateDropdownOptions(rows);
         filterData();
     } else {
@@ -365,49 +298,20 @@ async function enterApp() {
 }
 
 /* ==========================================================================
-   HIT PARAMETER & FORMATTING HELPERS
+   HIT PARAMETERS & CONFIGS
    ========================================================================== */
 const NON_ISSUE_VALUES = new Set(['', 'NO OPPORTUNITY', 'NA', 'N/A', 'NO', 'NONE']);
-
 const HIT_PARAMS = [
     { col: 'IRRELEVANT SOLUTION', category: 'Reliable', label: 'Irrelevant solution given', type: 'descriptive' },
     { col: 'INCOMPLETE SOLUTION', category: 'Reliable', label: 'Incomplete solution given', type: 'descriptive' },
-    { col: 'UNTIMELY SOLUTION ( ZTP)', category: 'Reliable', label: 'Untimely solution (ZTP)', type: 'descriptive' },
-    { col: 'UNCLEAR SOLUTION', category: 'Reliable', label: 'Unclear solution given', type: 'descriptive' },
-    { col: 'Poor Listening Skills?', category: 'Personable', label: 'Poor listening skills', type: 'descriptive' },
-    { col: 'Customer Validation and Empathy Gap?', category: 'Personable', label: 'Empathy / validation gap', type: 'descriptive' },
-    { col: 'Did not adjust the tone/pace to match the customer?', category: 'Personable', label: 'Tone/pace not matched to customer', type: 'descriptive' },
-    { col: 'Did not adjust to the customers language?', category: 'Personable', label: 'Language not adjusted to customer', type: 'descriptive' },
-    { col: 'Negative Words, Phrasing and Limitations?', category: 'Personable', label: 'Negative words / phrasing used', type: 'descriptive' },
-    { col: 'Unfriendly/discourteous/sarcastic?', category: 'Personable', label: 'Unfriendly, discourteous, or sarcastic tone', type: 'descriptive' },
-    { col: 'Sounded transactional or robotic?', category: 'Personable', label: 'Sounded transactional or robotic', type: 'descriptive' },
-    { col: 'FAST: Were there other Agent factors observed that affected the customer experience?', category: 'Fast', label: 'Other agent factor slowed the resolution', type: 'descriptive' },
     { col: 'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?', category: 'Safe & Secure', label: 'Customer authentication process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE DATA PRIVACY POLICY?', category: 'Safe & Secure', label: 'Data privacy policy not followed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?', category: 'Safe & Secure', label: 'Customer info not updated in tool', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE CSAT/NPS PROCESS?', category: 'Safe & Secure', label: 'CSAT/NPS process not followed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?', category: 'Safe & Secure', label: 'System documentation process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?', category: 'Safe & Secure', label: 'System tagging process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?', category: 'Safe & Secure', label: 'Grammar / prescribed language standard missed', type: 'boolean', hitValue: 'NO' },
-    { col: "IS THIS A POTENTIAL CUSTOMER MISTREAT?", category: 'Mistreat', label: 'Potential customer mistreat flagged', type: 'boolean', hitValue: 'YES' }
+    { col: 'DID WE FOLLOW THE DATA PRIVACY POLICY?', category: 'Safe & Secure', label: 'Data privacy policy not followed', type: 'boolean', hitValue: 'NO' }
 ];
 
-function escapeHtml(str) {
-    return String(str || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-function normVal(v) {
-    return (v === undefined || v === null) ? '' : String(v).trim().toUpperCase();
-}
-
+function escapeHtml(str) { return String(str || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function normVal(v) { return (v === undefined || v === null) ? '' : String(v).trim().toUpperCase(); }
 function normalizeName(str) {
-    return String(str || '')
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .toUpperCase()
-        .replace(/[.,'-]/g, ' ')
-        .replace(/\b(JR|SR|II|III|IV)\b/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
+    return String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[.,'-]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function getRowIssues(row) {
@@ -416,24 +320,13 @@ function getRowIssues(row) {
         const raw = row[p.col];
         const v = normVal(raw);
         if (!v) return;
-
-        if (p.type === 'boolean') {
-            if (v === p.hitValue) issues.push({ label: p.label, category: p.category });
-            return;
-        }
-
-        if (!NON_ISSUE_VALUES.has(v)) {
-            const detail = v !== 'YES' ? String(raw).trim() : '';
-            issues.push({ label: detail ? `${p.label} — ${detail}` : p.label, category: p.category });
-        }
+        if (p.type === 'boolean' && v === p.hitValue) issues.push({ label: p.label, category: p.category });
+        else if (p.type !== 'boolean' && !NON_ISSUE_VALUES.has(v)) issues.push({ label: p.label, category: p.category });
     });
     return issues;
 }
 
-/* ==========================================================================
-   WORKBOOK PARSER
-   ========================================================================== */
-function parseWorkbookFile(file, preferSheetKeywords = []) {
+function parseWorkbookFile(file, keywords = []) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -441,23 +334,13 @@ function parseWorkbookFile(file, preferSheetKeywords = []) {
                 const data = new Uint8Array(e.target.result);
                 const wb = XLSX.read(data, { type: 'array' });
                 let sheetName = wb.SheetNames[0];
-
-                if (preferSheetKeywords && preferSheetKeywords.length > 0) {
-                    const keywords = Array.isArray(preferSheetKeywords) ? preferSheetKeywords : [preferSheetKeywords];
-                    const found = wb.SheetNames.find(n => 
-                        keywords.some(kw => n.toUpperCase().includes(kw.toUpperCase()))
-                    );
+                if (keywords.length) {
+                    const found = wb.SheetNames.find(n => keywords.some(kw => n.toUpperCase().includes(kw.toUpperCase())));
                     if (found) sheetName = found;
                 }
-
-                const ws = wb.Sheets[sheetName];
-                const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
-                resolve(json);
-            } catch (err) {
-                reject(err);
-            }
+                resolve(XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '', raw: false }));
+            } catch (err) { reject(err); }
         };
-        reader.onerror = reject;
         reader.readAsArrayBuffer(file);
     });
 }
@@ -465,670 +348,273 @@ function parseWorkbookFile(file, preferSheetKeywords = []) {
 function findHeader(row, candidates) {
     if (!row) return null;
     const keys = Object.keys(row);
-    
     for (const cand of candidates) {
         const hit = keys.find(k => k.trim().toLowerCase() === cand.trim().toLowerCase());
-        if (hit) return hit;
-    }
-    for (const cand of candidates) {
-        const hit = keys.find(k => k.trim().toLowerCase().includes(cand.trim().toLowerCase()));
         if (hit) return hit;
     }
     return null;
 }
 
-/* ==========================================================================
-   DATA UPLOADS & RESYNC
-   ========================================================================== */
 async function handleRosterUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
-    const rosterStatus = document.getElementById('rosterStatus');
-    if (rosterStatus) rosterStatus.textContent = 'Processing ' + file.name + '...';
-
     try {
-        const rows = await parseWorkbookFile(file, ['ROSTER', 'DOMAIN', 'MASTER']);
-        if (!rows.length) throw new Error('Excel file appears empty.');
-
-        const emailKey = findHeader(rows[0], ['PLDT/SMART Domain v2', 'PLDT/SMART Domain', 'Domain', 'Email', 'Work Email', 'Conduent Email Address', 'Email Address']);
-        const nameKey = findHeader(rows[0], ['Employee Name', 'Agent Name', 'AGENT/OFFICER NAME', 'Name', 'Full Name']);
-        const idKey = findHeader(rows[0], ['Win ID', 'WIN ID', 'ID', 'Employee ID', 'Agent ID']);
-
-        if (!emailKey || !nameKey) {
-            throw new Error('Missing required Roster headers (Domain/Email and Agent Name).');
-        }
-
-        const roster = rows
-            .map(r => ({
-                email: String(r[emailKey] || '').trim().toLowerCase(),
-                agentName: String(r[nameKey] || '').trim(),
-                agentId: idKey ? String(r[idKey] || '').trim() : ''
-            }))
-            .filter(r => r.email && r.agentName);
-
+        const rows = await parseWorkbookFile(file, ['ROSTER', 'MASTER']);
+        const roster = rows.map(r => ({
+            email: String(r[findHeader(r, ['Domain', 'Email', 'Work Email'])] || '').trim().toLowerCase(),
+            agentName: String(r[findHeader(r, ['Agent Name', 'Employee Name', 'Name'])] || '').trim()
+        })).filter(r => r.email && r.agentName);
         await clearCollection('roster');
-        await batchWriteDocs('roster', roster, (r) => r.email);
-
-        if (rosterStatus) rosterStatus.innerHTML = `✅ Roster uploaded: ${roster.length} agent records.`;
+        await batchWriteDocs('roster', roster, r => r.email);
+        document.getElementById('rosterStatus').innerHTML = `✅ Roster uploaded: ${roster.length} agents.`;
     } catch (err) {
-        console.error(err);
-        if (rosterStatus) rosterStatus.innerHTML = `⚠️ Roster upload failed: ${err.message}`;
+        document.getElementById('rosterStatus').innerHTML = `⚠️ Roster upload failed: ${err.message}`;
     }
 }
 
 async function refreshRosterStatus() {
-    try {
-        const snap = await getDocs(collection(db, 'roster'));
-        const rosterStatus = document.getElementById('rosterStatus');
-        if (rosterStatus) {
-            rosterStatus.innerHTML = snap.size ? `✅ Roster active: ${snap.size} agents.` : '⚠️ No roster records found.';
-        }
-    } catch (err) {
-        console.warn("Roster status read restricted or failed:", err);
-    }
-}
-
-async function resyncAgentEmails() {
-    const statusEl = document.getElementById('resyncStatus');
-    if (statusEl) statusEl.textContent = 'Re-syncing email matches...';
-
-    try {
-        const rosterSnap = await getDocs(collection(db, 'roster'));
-        const nameToEmail = {};
-        rosterSnap.forEach(d => {
-            const data = d.data();
-            nameToEmail[normalizeName(data.agentName)] = d.id;
-        });
-
-        const dataSnap = await getDocs(collection(db, 'auditData'));
-        const docs = dataSnap.docs;
-
-        let matched = 0, unmatched = 0;
-        const promises = [];
-
-        for (let i = 0; i < docs.length; i += 400) {
-            const chunk = docs.slice(i, i + 400);
-            const batch = writeBatch(db);
-            chunk.forEach(d => {
-                const row = d.data();
-                const key = normalizeName(row['AGENT/OFFICER NAME']);
-                const email = nameToEmail[key] || '';
-                if (email) matched++; else unmatched++;
-                batch.update(doc(db, 'auditData', d.id), { agentEmailLower: email });
-            });
-            promises.push(batch.commit());
-        }
-        await Promise.all(promises);
-
-        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} records matched to email, ${unmatched} unmatched.`;
-    } catch (err) {
-        console.error(err);
-        if (statusEl) statusEl.textContent = '⚠️ Re-sync failed: ' + err.message;
-    }
+    const snap = await getDocs(collection(db, 'roster'));
+    document.getElementById('rosterStatus').innerHTML = snap.size ? `✅ Roster active: ${snap.size} agents.` : '⚠️ No roster records found.';
 }
 
 const NEEDED_FIELDS = [
     'ID', 'FORM TYPE', 'BRAND', 'LINE OF BUSINESS', 'AGENT/OFFICER NAME', 'AGENT TENURE',
-    'TEAM LEADER', 'CLUSTER', 'WEEKENDING', 'MONTH', 'MISTREAT',
-    'RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE',
-    'EE number/ID number', 'OVERALL PASSRATE', 'CM',
-    'RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS'
+    'TEAM LEADER', 'CLUSTER', 'WEEKENDING', 'MONTH', 'WORK SETUP',
+    'RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE', 'OVERALL PASSRATE'
 ].concat(HIT_PARAMS.map(p => p.col));
 
 async function handleDataUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
-    const dataStatus = document.getElementById('dataStatus');
-    if (dataStatus) dataStatus.textContent = 'Processing ' + file.name + '...';
-
     try {
         const rows = await parseWorkbookFile(file, ['RAW', 'DATA']);
-        if (!rows.length) throw new Error('Data file appears empty.');
-
-        // --- header detection + mapping (robust) ---
         const headerMap = {};
-        NEEDED_FIELDS.forEach(f => {
-          const h = findHeader(rows[0], [f]);
-          if (h) headerMap[f] = h;
-        });
+        NEEDED_FIELDS.forEach(f => { const h = findHeader(rows[0], [f]); if (h) headerMap[f] = h; });
 
-        const sampleKeys = Object.keys(rows[0] || {});
-
-        function findByPatterns(patterns) {
-          return sampleKeys.find(k => patterns.some(p => new RegExp(p, 'i').test(k)));
-        }
-
-        // common variants to search for
-        const scoreCandidates = [
-          'OVERALL\\s*SCORE', 'OVERALL_SCORE', '^SCORE$', 'TOTAL\\s*SCORE', 'OVERALL', 'FINAL\\s*SCORE', 'SCORE\\s*\\(\\%\\)', 'SCORE\\s*%','OVERALL SCORE \\(\\%\\)'
-        ];
-        const passRateCandidates = [
-          'OVERALL\\s*PASSRATE', 'PASSRATE', 'PASS RATE', 'PASS_STATUS', 'PASSED', 'OVERALL PASS', 'PASS'
-        ];
-
-        let detectedScoreKey = headerMap['OVERALL SCORE'] || findByPatterns(scoreCandidates);
-        // fallback: find any key where at least one sample row has a numeric value
-        if (!detectedScoreKey) {
-          detectedScoreKey = sampleKeys.find(k => {
-            return rows.some(r => {
-              const v = r[k];
-              return v !== '' && !isNaN(parseFloat(String(v).replace(/%/g, '').replace(',', '')));
-            });
-          });
-        }
-
-        let detectedPassKey = headerMap['OVERALL PASSRATE'] || findByPatterns(passRateCandidates);
-
-        // log detection
-        console.log('Detected keys -> score:', detectedScoreKey, 'passrate:', detectedPassKey);
-
-        // ensure headerMap has entries for the expected names so downstream code works
-        if (detectedScoreKey) headerMap['OVERALL SCORE'] = detectedScoreKey;
-        if (detectedPassKey) headerMap['OVERALL PASSRATE'] = detectedPassKey;
-        // --- end detection ---
-
-        // ---- process rows into canonical fields (same as before, using headerMap) ----
         const rosterSnap = await getDocs(collection(db, 'roster'));
         const nameToEmail = {};
-        rosterSnap.forEach(d => {
-          const data = d.data();
-          nameToEmail[normalizeName(data.agentName)] = d.id;
-        });
+        rosterSnap.forEach(d => { nameToEmail[normalizeName(d.data().agentName)] = d.id; });
 
-        const UPPERCASE_FIELDS = ['FORM TYPE', 'MONTH', 'AGENT TENURE', 'OVERALL PASSRATE', 'CM'];
-        const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER', 'CLUSTER', 'WEEKENDING'];
-
-const processed = rows.map(r => {
+        const processed = rows.map(r => {
             const out = {};
-            NEEDED_FIELDS.forEach(f => {
-                const h = headerMap[f];
-                out[f] = h ? r[h] : '';
-            });
-            UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
-            TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
-
-            // 1. Parse individual category scores first (Removed 'OVERALL SCORE' from this loop)
-            ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE'].forEach(k => {
+            NEEDED_FIELDS.forEach(f => { out[f] = headerMap[f] ? r[headerMap[f]] : ''; });
+            ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'].forEach(k => {
                 const n = parseFloat(out[k]);
                 out[k] = isNaN(n) ? null : (n <= 1 ? Math.round(n * 100) : Math.round(n));
             });
-
-            // ====================================================================
-            // 2. AUTOMATICALLY CALCULATE OVERALL SCORE
-            // ====================================================================
-            
-// Calculate Custom Weighted Average based on the Excel generator formula
-const rel = out['RELIABLE'] || 0;
-const per = out['PERSONABLE'] || 0;
-const fst = out['FAST'] || 0;
-const saf = out['SAFE & SECURE'] || 0;
-
-out['OVERALL SCORE'] = Math.round((rel * 0.45) + (per * 0.45) + (fst * 0.05) + (saf * 0.05));
-
-            // OPTION B: Sum (If the categories are already weighted points that add up to 100)
-            // out['OVERALL SCORE'] = rel + per + fst + saf;
-
-            // OPTION C: Custom Weighted Average (e.g., Reliable 40%, Personable 30%, Fast 10%, Safe 20%)
-            // out['OVERALL SCORE'] = Math.round((rel * 0.40) + (per * 0.30) + (fst * 0.10) + (saf * 0.20));
-
-            // ====================================================================
-
+            out['LINE OF BUSINESS'] = out['LINE OF BUSINESS'] || out['BRAND'] || 'Enterprise Hotline';
+            out['WORK SETUP'] = (normVal(out['WORK SETUP']).includes('WFH') || normVal(out['WORK SETUP']).includes('HOME')) ? 'WFH' : 'On-Site';
             out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
             return out;
         }).filter(r => r['AGENT/OFFICER NAME']);
 
-        // --- diagnostics: parsed headers and preview ---
-        console.log('Parsed headers:', Object.keys(rows[0] || {}));
-        console.log('handleDataUpload — processed rows:', processed.length, processed[0] || null);
-
         await replaceAuditData(processed);
-
         cachedAuditRows = processed;
-
-        // expose cache for debugging in Console:
-        window.__cachedAuditRows = cachedAuditRows;
-
-        // quick check that cache was set
-        console.log('cachedAuditRows length', cachedAuditRows.length);
-
-        // pass diagnostic (uses same logic as UI)
-        const passDiag = (() => {
-            const rowsArr = window.__cachedAuditRows || [];
-            const isPassed = r => {
-                const passrate = r['OVERALL PASSRATE'];
-                if (passrate && String(passrate).trim().toUpperCase()) {
-                    return String(passrate).trim().toUpperCase() === 'PASSED';
-                }
-                const score = r['OVERALL SCORE'];
-                return (typeof score === 'number' ? score : parseFloat(score || 0)) >= 85;
-            };
-            const passed = rowsArr.filter(isPassed).length;
-            return { passed, total: rowsArr.length, passPct: rowsArr.length ? Math.round((passed/rowsArr.length)*100) : 0 };
-        })();
-        console.log('handleDataUpload — pass diagnostic:', passDiag);
-
-        if (dataStatus) dataStatus.innerHTML = `✅ Successfully uploaded ${processed.length} audit records.`;
-        
+        document.getElementById('dataStatus').innerHTML = `✅ Successfully uploaded ${processed.length} records.`;
         populateDropdownOptions(processed);
-        // ensure UI shows the full newly uploaded dataset
-        resetFilters();
+        filterData();
     } catch (err) {
-        console.error("Data Upload Failed:", err);
-        if (dataStatus) dataStatus.innerHTML = `⚠️ Upload failed: ${err.message}`;
+        document.getElementById('dataStatus').innerHTML = `⚠️ Upload failed: ${err.message}`;
     }
 }
 
 /* ==========================================================================
-   SUPERVISOR DASHBOARD & FILTERS
+   DASHBOARD FILTERING & MULTI-LOB RENDERING
    ========================================================================== */
 function populateDropdownOptions(rows) {
-    const map = {
-        selectFormType: 'FORM TYPE',
-        selectBrand: 'LINE OF BUSINESS',
-        selectMonth: 'MONTH',
-        selectWeekending: 'WEEKENDING',
-        selectTenure: 'AGENT TENURE',
-        selectTeamLeader: 'TEAM LEADER'
-    };
-
+    const map = { selectFormType: 'FORM TYPE', selectBrand: 'LINE OF BUSINESS', selectMonth: 'MONTH', selectWeekending: 'WEEKENDING', selectTenure: 'AGENT TENURE', selectTeamLeader: 'TEAM LEADER' };
     Object.entries(map).forEach(([selId, field]) => {
         const sel = document.getElementById(selId);
         if (!sel) return;
-        const current = sel.value;
-
-        let uniques;
-        if (field === 'LINE OF BUSINESS') {
-            // For LOB prefer LINE OF BUSINESS, otherwise fall back to BRAND
-            uniques = [...new Set(rows.map(r => (String(r['LINE OF BUSINESS'] || r['BRAND'] || '')).trim()).filter(Boolean))].sort();
-        } else {
-            uniques = [...new Set(rows.map(r => String(r[field] || '').trim()).filter(Boolean))].sort();
-        }
-
-        sel.innerHTML = `<option value="ALL">(All)</option>` + uniques.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
-        if (uniques.includes(current)) sel.value = current;
+        const uniques = [...new Set(rows.map(r => r[field]).filter(Boolean))].sort();
+        sel.innerHTML = `<option value="ALL">(All)</option>` + uniques.map(v => `<option value="${v}">${v}</option>`).join('');
     });
 }
 
 async function loadAllAuditData() {
-    try {
-        const snap = await getDocs(collection(db, 'auditData'));
-        cachedAuditRows = snap.docs.map(d => d.data());
-        console.log("Firestore auditData query succeeded. Row count:", cachedAuditRows.length);
-        return cachedAuditRows;
-    } catch (err) {
-        console.error("Failed to load /auditData collection:", err);
-        return [];
-    }
+    const snap = await getDocs(collection(db, 'auditData'));
+    cachedAuditRows = snap.docs.map(d => d.data());
+    return cachedAuditRows;
 }
 
 function toggleUploadPanel() {
-    const panel = document.getElementById('uploadPopover');
-    if (panel) panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+    const p = document.getElementById('uploadPopover');
+    p.style.display = p.style.display === 'none' ? 'flex' : 'none';
 }
 
 function resetFilters() {
-    ['selectFormType', 'selectBrand', 'selectMonth', 'selectWeekending', 'selectTenure', 'selectTeamLeader']
-        .forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.value = 'ALL';
-        });
+    ['selectFormType', 'selectBrand', 'selectMonth', 'selectWeekending', 'selectTenure', 'selectTeamLeader'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = 'ALL';
+    });
     filterData();
 }
 
 function filterData() {
-    const rows = cachedAuditRows;
-    if (!rows || !rows.length) {
-        renderSupervisorDashboard([]);
-        return;
-    }
+    const g = id => document.getElementById(id)?.value || 'ALL';
+    const filters = { formType: g('selectFormType'), lob: g('selectBrand'), month: g('selectMonth'), weekending: g('selectWeekending'), tenure: g('selectTenure'), tl: g('selectTeamLeader') };
 
-    const getValue = (id) => {
-        const el = document.getElementById(id);
-        return el ? el.value : 'ALL';
-    };
-
-    const f = {
-        formType: getValue('selectFormType'),
-        lob: getValue('selectBrand'),
-        month: getValue('selectMonth'),
-        weekending: getValue('selectWeekending'),
-        tenure: getValue('selectTenure'),
-        teamLeader: getValue('selectTeamLeader')
-    };
-
-    const filtered = rows.filter(r => {
-        const rLob = r['LINE OF BUSINESS'] || r['BRAND'] || '';
-        return (f.formType === 'ALL' || r['FORM TYPE'] === f.formType) &&
-            (f.lob === 'ALL' || rLob === f.lob) &&
-            (f.month === 'ALL' || r['MONTH'] === f.month) &&
-            (f.weekending === 'ALL' || r['WEEKENDING'] === f.weekending) &&
-            (f.tenure === 'ALL' || r['AGENT TENURE'] === f.tenure) &&
-            (f.teamLeader === 'ALL' || r['TEAM LEADER'] === f.teamLeader);
-    });
-
+    const filtered = cachedAuditRows.filter(r => 
+        (filters.formType === 'ALL' || r['FORM TYPE'] === filters.formType) &&
+        (filters.lob === 'ALL' || r['LINE OF BUSINESS'] === filters.lob) &&
+        (filters.month === 'ALL' || r['MONTH'] === filters.month) &&
+        (filters.weekending === 'ALL' || r['WEEKENDING'] === filters.weekending) &&
+        (filters.tenure === 'ALL' || r['AGENT TENURE'] === filters.tenure) &&
+        (filters.tl === 'ALL' || r['TEAM LEADER'] === filters.tl)
+    );
     renderSupervisorDashboard(filtered);
 }
 
-function tenureBucket(tenureStr) {
-    const t = normVal(tenureStr);
-    if (t.includes('0-30')) return 'b1';
-    if (t.includes('31-60') || t.includes('61-90') || t.includes('31-90')) return 'b2';
-    return 'b3';
-}
-
-function renderGroupedBarChart(data) {
-    const canvas = document.getElementById('lobChartCanvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-
-    const groups = {};
-    data.forEach(r => {
-        const lob = r['LINE OF BUSINESS'] || r['BRAND'] || 'Unspecified';
-        if (!groups[lob]) {
-            groups[lob] = { reliable: [], personable: [], fast: [], safe: [], overall: [] };
-        }
-        if (r['RELIABLE'] !== null && !isNaN(r['RELIABLE'])) groups[lob].reliable.push(r['RELIABLE']);
-        if (r['PERSONABLE'] !== null && !isNaN(r['PERSONABLE'])) groups[lob].personable.push(r['PERSONABLE']);
-        if (r['FAST'] !== null && !isNaN(r['FAST'])) groups[lob].fast.push(r['FAST']);
-        if (r['SAFE & SECURE'] !== null && !isNaN(r['SAFE & SECURE'])) groups[lob].safe.push(r['SAFE & SECURE']);
-        if (r['OVERALL SCORE'] !== null && !isNaN(r['OVERALL SCORE'])) groups[lob].overall.push(r['OVERALL SCORE']);
-    });
-
-    const labels = Object.keys(groups).sort();
-    const getAvg = (arr) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
-
-    const dataReliable = labels.map(l => getAvg(groups[l].reliable));
-    const dataPersonable = labels.map(l => getAvg(groups[l].personable));
-    const dataFast = labels.map(l => getAvg(groups[l].fast));
-    const dataSafe = labels.map(l => getAvg(groups[l].safe));
-    const dataOverall = labels.map(l => getAvg(groups[l].overall));
-
-    if (lobChartInstance) {
-        lobChartInstance.destroy();
-    }
-
-    lobChartInstance = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [
-                { label: 'Reliable', data: dataReliable, backgroundColor: '#EF9A9A' },      // Light Rose / Coral
-                { label: 'Personable', data: dataPersonable, backgroundColor: '#E57373' },    // Soft Red
-                { label: 'Fast', data: dataFast, backgroundColor: '#E53935' },          // Medium Red
-                { label: 'Safe & Secure', data: dataSafe, backgroundColor: '#C62828' }, // Crimson / Dark Red
-                { label: 'Overall Score', data: dataOverall, backgroundColor: '#7F0000' }   // Deep Burgundy / Wine
-            ]
-        },
-        plugins: [ChartDataLabels],
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            layout: {
-                padding: {
-                    top: 20,
-                    bottom: 10
-                }
-            },
-            plugins: {
-                legend: {
-                    position: 'top',
-                    labels: {
-                        usePointStyle: true,
-                        pointStyle: 'rect',
-                        padding: 15,
-                        font: { size: 10, weight: 'bold' }
-                    }
-                },
-                datalabels: {
-                    anchor: 'end',
-                    align: 'top',
-                    offset: 2,
-                    formatter: (val) => val ? val + '%' : '',
-                    font: { size: 8, weight: 'bold' },
-                    color: '#333'
-                }
-            },
-            scales: {
-                y: {
-                    display: false,
-                    max: 115
-                },
-                x: {
-                    grid: { display: false },
-                    ticks: { 
-                        font: { size: 9, weight: '600' }, 
-                        color: '#333',
-                        maxRotation: 45,
-                        minRotation: 0,
-                        autoSkip: false
-                    }
-                }
-            }
-        }
-    });
+function tenureGroup(tStr) {
+    const t = normVal(tStr);
+    if (t.includes('0-30')) return '0-30';
+    if (t.includes('31-60')) return '31-60';
+    if (t.includes('61-90')) return '61-90';
+    return '>91';
 }
 
 function renderSupervisorDashboard(data) {
-    const totalPassRateVal = document.getElementById('totalPassRateVal');
-    const totalFailRateVal = document.getElementById('totalFailRateVal');
-    const cmSuperstarVal = document.getElementById('cmSuperstarVal');
-    const cmUnderperformerVal = document.getElementById('cmUnderperformerVal');
-    const leaderChart = document.getElementById('leaderChart');
-    const topHitsTable = document.getElementById('topHitsTable');
+    const LOB_LIST = ['Enterprise Hotline', 'Enterprise Sana All', 'BOH - DIS Account Management', 'Enterprise Email', 'Enterprise Social Media'];
+    
+    // 1. Pass Rate Table Body
+    const passRateTbody = document.getElementById('passRateTableBody');
+    let totalPass = 0, totalAudits = 0;
 
-    const topHitsBody = topHitsTable ? (topHitsTable.querySelector('tbody') || topHitsTable) : null;
+    passRateTbody.innerHTML = LOB_LIST.map(lob => {
+        const lobRows = data.filter(r => r['LINE OF BUSINESS'] === lob);
+        const passed = lobRows.filter(r => r['OVERALL PASSRATE'] === 'PASSED' || (r['OVERALL SCORE'] || 0) >= 85).length;
+        const failed = lobRows.length - passed;
+        totalPass += passed;
+        totalAudits += lobRows.length;
+        const passPct = lobRows.length ? Math.round((passed / lobRows.length) * 100) + '%' : '0%';
+        const failPct = lobRows.length ? Math.round((failed / lobRows.length) * 100) + '%' : '0%';
+        return `<tr><td>${lob}</td><td>${passPct}</td><td>${failPct}</td><td>100%</td></tr>`;
+    }).join('') + `<tr class="total-row"><td>Grand Total</td><td>${totalAudits ? Math.round((totalPass/totalAudits)*100)+'%' : '0%'}</td><td>${totalAudits ? Math.round(((totalAudits-totalPass)/totalAudits)*100)+'%' : '0%'}</td><td>100%</td></tr>`;
 
-    if (!data || !data.length) {
-        if (totalPassRateVal) totalPassRateVal.textContent = '-';
-        if (totalFailRateVal) totalFailRateVal.textContent = '-';
-        if (cmSuperstarVal) cmSuperstarVal.textContent = '-';
-        if (cmUnderperformerVal) cmUnderperformerVal.textContent = '-';
-        if (leaderChart) leaderChart.innerHTML = '<div class="empty-note">No matching data.</div>';
-        if (topHitsBody) topHitsBody.innerHTML = '<tr><td colspan="3" class="empty-note">No matching audit data available.</td></tr>';
-        
-        if (lobChartInstance) {
-            lobChartInstance.destroy();
-            lobChartInstance = null;
-        }
-        return;
-    }
+    // 2. Audit Counts & Averages Tables by Tenure
+    const auditCountTbody = document.getElementById('auditCountTableBody');
+    const avgScoreTbody = document.getElementById('avgScoreTableBody');
+    const tenureCols = ['0-30', '31-60', '61-90', '>91'];
 
-    renderGroupedBarChart(data);
+    let countTotals = { '0-30':0, '31-60':0, '61-90':0, '>91':0, total: 0 };
+    auditCountTbody.innerHTML = LOB_LIST.map(lob => {
+        const lobRows = data.filter(r => r['LINE OF BUSINESS'] === lob);
+        const counts = {};
+        tenureCols.forEach(col => {
+            counts[col] = lobRows.filter(r => tenureGroup(r['AGENT TENURE']) === col).length;
+            countTotals[col] += counts[col];
+        });
+        const rowTotal = lobRows.length;
+        countTotals.total += rowTotal;
+        return `<tr><td>${lob}</td><td>${counts['0-30']}</td><td>${counts['31-60']}</td><td>${counts['61-90']}</td><td>${counts['>91']}</td><td>${rowTotal}</td></tr>`;
+    }).join('') + `<tr class="total-row"><td>Grand Total</td><td>${countTotals['0-30']}</td><td>${countTotals['31-60']}</td><td>${countTotals['61-90']}</td><td>${countTotals['>91']}</td><td>${countTotals.total}</td></tr>`;
 
-    const avg = (key) => {
-        const vals = data.map(r => r[key]).filter(v => v !== null && v !== undefined && !isNaN(v));
-        if (!vals.length) return null;
-        return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-    };
+    avgScoreTbody.innerHTML = LOB_LIST.map(lob => {
+        const lobRows = data.filter(r => r['LINE OF BUSINESS'] === lob);
+        const avgs = {};
+        tenureCols.forEach(col => {
+            const match = lobRows.filter(r => tenureGroup(r['AGENT TENURE']) === col && r['OVERALL SCORE'] !== null);
+            avgs[col] = match.length ? Math.round(match.reduce((a,b)=>a+b['OVERALL SCORE'],0)/match.length) + '%' : '-';
+        });
+        const allMatch = lobRows.filter(r => r['OVERALL SCORE'] !== null);
+        const rowAvg = allMatch.length ? Math.round(allMatch.reduce((a,b)=>a+b['OVERALL SCORE'],0)/allMatch.length) + '%' : '-';
+        return `<tr><td>${lob}</td><td>${avgs['0-30']}</td><td>${avgs['31-60']}</td><td>${avgs['61-90']}</td><td>${avgs['>91']}</td><td>${rowAvg}</td></tr>`;
+    }).join('');
 
-    const avgOverall = avg('OVERALL SCORE');
-
-    const isPassed = (r) => r['OVERALL PASSRATE'] ? r['OVERALL PASSRATE'] === 'PASSED' : (r['OVERALL SCORE'] || 0) >= 85;
-    const passed = data.filter(isPassed).length;
-    const passPct = Math.round((passed / data.length) * 100);
-
-    if (totalPassRateVal) totalPassRateVal.textContent = passPct + '%';
-    if (totalFailRateVal) totalFailRateVal.textContent = (100 - passPct) + '%';
-
-    const buckets = { b1: [], b2: [], b3: [] };
-    data.forEach(r => buckets[tenureBucket(r['AGENT TENURE'])].push(r));
-    const bucketAvg = (arr) => {
-        const vals = arr.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
-        return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) + '%' : '-';
-    };
-
-    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-    setText('totalAuditNhip', buckets.b1.length || '-');
-    setText('totalAudit31', buckets.b2.length || '-');
-    setText('totalAudit91', buckets.b3.length || '-');
-    setText('totalAuditTotal', data.length);
-    setText('totalAvgNhip', bucketAvg(buckets.b1));
-    setText('totalAvg31', bucketAvg(buckets.b2));
-    setText('totalAvg91', bucketAvg(buckets.b3));
-    setText('totalAvgTotal', avgOverall === null ? '-' : avgOverall + '%');
-
-    const cmRows = data.filter(r => r['CM']);
-    if (cmRows.length) {
-        const superstar = cmRows.filter(r => r['CM'] === 'SUPERSTAR').length;
-        if (cmSuperstarVal) cmSuperstarVal.textContent = Math.round((superstar / cmRows.length) * 100) + '%';
-        if (cmUnderperformerVal) cmUnderperformerVal.textContent = Math.round(((cmRows.length - superstar) / cmRows.length) * 100) + '%';
-    } else {
-        if (cmSuperstarVal) cmSuperstarVal.textContent = '-';
-        if (cmUnderperformerVal) cmUnderperformerVal.textContent = '-';
-    }
-
+    // 3. Team Leader Leaderboard
     const tlScores = {};
     data.forEach(r => {
         const tl = r['TEAM LEADER'] || 'Unassigned';
         if (!tlScores[tl]) tlScores[tl] = { total: 0, count: 0 };
-        if (r['OVERALL SCORE'] !== null && r['OVERALL SCORE'] !== undefined && !isNaN(r['OVERALL SCORE'])) {
-            tlScores[tl].total += r['OVERALL SCORE'];
-            tlScores[tl].count++;
-        }
+        if (r['OVERALL SCORE'] !== null) { tlScores[tl].total += r['OVERALL SCORE']; tlScores[tl].count++; }
     });
+    document.getElementById('leaderChart').innerHTML = Object.entries(tlScores).map(([tl, s]) => {
+        const avg = s.count ? Math.round(s.total / s.count) : 0;
+        return `<div class="horizontal-bar-row">
+            <div class="horizontal-label" title="${escapeHtml(tl)}">${escapeHtml(tl)}</div>
+            <div class="horizontal-bar-container"><div class="horizontal-bar-fill" style="width:${avg}%;">${avg}%</div></div>
+        </div>`;
+    }).join('') || '<div class="empty-note">No matching data.</div>';
 
-    if (leaderChart) {
-        leaderChart.innerHTML = Object.entries(tlScores).map(([tl, s]) => {
-            const a = s.count ? Math.round(s.total / s.count) : 0;
-            return `<div class="horizontal-bar-row">
-                <div class="horizontal-label" title="${escapeHtml(tl)}">${escapeHtml(tl)}</div>
-                <div class="horizontal-bar-container"><div class="horizontal-bar-fill" style="width:${a}%;">${a}%</div></div>
-            </div>`;
-        }).join('') || '<div class="empty-note">No matching data.</div>';
-    }
+    // 4. Charts Initialization
+    renderGroupedBarChart(data);
+    renderSiteComparisonChart(data);
+}
 
-    const hitCounts = {};
-    data.forEach(r => {
-        getRowIssues(r).forEach(issue => {
-            const key = issue.label + '||' + issue.category;
-            hitCounts[key] = (hitCounts[key] || 0) + 1;
-        });
-    });
-    const sortedHits = Object.entries(hitCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+function renderGroupedBarChart(data) {
+    const ctx = document.getElementById('lobChartCanvas').getContext('2d');
+    const LOB_LIST = ['Enterprise Hotline', 'Enterprise Sana All', 'BOH - DIS Account Management', 'Enterprise Email'];
     
-    if (topHitsBody) {
-        topHitsBody.innerHTML = sortedHits.length
-            ? sortedHits.map(([key, count]) => {
-                const [label, category] = key.split('||');
-                return `<tr><td style="text-align:left;">${escapeHtml(label)}</td><td>${escapeHtml(category)}</td><td>${count}</td></tr>`;
-            }).join('')
-            : '<tr><td colspan="3" class="empty-note">No parameters flagged in this selection.</td></tr>';
-    }
+    const getAvg = (lob, key) => {
+        const rows = data.filter(r => r['LINE OF BUSINESS'] === lob && r[key] !== null);
+        return rows.length ? Math.round(rows.reduce((a,b)=>a+b[key],0)/rows.length) : 0;
+    };
+
+    if (lobChartInstance) lobChartInstance.destroy();
+    lobChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: LOB_LIST,
+            datasets: [
+                { label: 'Reliable', data: LOB_LIST.map(l => getAvg(l, 'RELIABLE')), backgroundColor: '#f2a6a6' },
+                { label: 'Personable', data: LOB_LIST.map(l => getAvg(l, 'PERSONABLE')), backgroundColor: '#e57373' },
+                { label: 'Fast', data: LOB_LIST.map(l => getAvg(l, 'FAST')), backgroundColor: '#d32f2f' },
+                { label: 'Safe & Secure', data: LOB_LIST.map(l => getAvg(l, 'SAFE & SECURE')), backgroundColor: '#b71c1c' },
+                { label: 'Overall', data: LOB_LIST.map(l => getAvg(l, 'OVERALL SCORE')), backgroundColor: '#7f0000' }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { datalabels: { display: false } } }
+    });
+}
+
+function renderSiteComparisonChart(data) {
+    const ctx = document.getElementById('siteChartCanvas').getContext('2d');
+    const channels = ['Enterprise Hotline', 'Enterprise Sana All', 'BOH - DIS Account Management', 'Enterprise Email'];
+    
+    const getSetupAvg = (channel, setup) => {
+        const rows = data.filter(r => r['LINE OF BUSINESS'] === channel && r['WORK SETUP'] === setup && r['OVERALL SCORE'] !== null);
+        return rows.length ? Math.round(rows.reduce((a,b)=>a+b['OVERALL SCORE'],0)/rows.length) : 0;
+    };
+
+    if (siteChartInstance) siteChartInstance.destroy();
+    siteChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: channels,
+            datasets: [
+                { label: 'On-Site', data: channels.map(c => getSetupAvg(c, 'On-Site')), backgroundColor: '#7a0f1e' },
+                { label: 'WFH', data: channels.map(c => getSetupAvg(c, 'WFH')), backgroundColor: '#b71c1c' }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
 }
 
 /* ==========================================================================
-   AGENT DASHBOARD VIEW
+   AGENT VIEW & GLOBAL BINDINGS
    ========================================================================== */
 async function renderAgentView() {
-    const welcomeName = document.getElementById('agentWelcomeName');
-    if (welcomeName) {
-        welcomeName.textContent = 'Welcome, ' + (currentSession.agentName || currentSession.email);
-    }
-
-    let myRows = [];
-    try {
-        const q = query(collection(db, 'auditData'), where('agentEmailLower', '==', currentSession.email.toLowerCase()));
-        const snap = await getDocs(q);
-        myRows = snap.docs.map(d => d.data());
-    } catch (err) {
-        console.error("Agent query failed:", err);
-    }
-
-    const emptyState = document.getElementById('agentEmptyState');
-    const agentContent = document.getElementById('agentContent');
+    document.getElementById('agentWelcomeName').textContent = 'Welcome, ' + (currentSession.agentName || currentSession.email);
+    const q = query(collection(db, 'auditData'), where('agentEmailLower', '==', currentSession.email.toLowerCase()));
+    const myRows = (await getDocs(q)).docs.map(d => d.data());
 
     if (!myRows.length) {
-        if (emptyState) emptyState.style.display = 'block';
-        if (agentContent) agentContent.style.display = 'none';
+        document.getElementById('agentEmptyState').style.display = 'block';
+        document.getElementById('agentContent').style.display = 'none';
         return;
     }
-
-    if (emptyState) emptyState.style.display = 'none';
-    if (agentContent) agentContent.style.display = 'flex';
-
-    const avg = (key) => {
-        const vals = myRows.map(r => r[key]).filter(v => v !== null && v !== undefined && !isNaN(v));
-        return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+    document.getElementById('agentEmptyState').style.display = 'none';
+    document.getElementById('agentContent').style.display = 'flex';
+    
+    const avg = k => {
+        const vals = myRows.map(r => r[k]).filter(v => v !== null);
+        return vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length) + '%' : '-';
     };
-
-    const tiles = [
-        { label: 'Reliable', val: avg('RELIABLE') },
-        { label: 'Personable', val: avg('PERSONABLE') },
-        { label: 'Fast', val: avg('FAST') },
-        { label: 'Safe & Secure', val: avg('SAFE & SECURE') },
-        { label: 'Overall Score', val: avg('OVERALL SCORE') }
-    ];
-
-    const scorecard = document.getElementById('agentScorecard');
-    if (scorecard) {
-        scorecard.innerHTML = tiles.map(t =>
-            `<div class="score-tile"><div class="num">${t.val === null ? '-' : t.val + '%'}</div><div class="lbl">${t.label}</div></div>`
-        ).join('');
-    }
-
-    const sorted = [...myRows].sort((a, b) => String(b['WEEKENDING'] || '').localeCompare(String(a['WEEKENDING'] || '')));
-
-    const auditRowHtml = (r) => {
-        const issues = getRowIssues(r);
-        const score = r['OVERALL SCORE'];
-        const passed = r['OVERALL PASSRATE'] ? r['OVERALL PASSRATE'] === 'PASSED' : (score !== null && score >= 85);
-        const tagsHtml = issues.length
-            ? issues.map(i => `<span class="tag ${i.category.replace(/\s|&/g, '')}">${escapeHtml(i.label)}</span>`).join('')
-            : `<span class="no-issues-note">✓ No parameters flagged on this audit.</span>`;
-
-        const comments = ['RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS']
-            .map(f => String(r[f] || '').trim())
-            .filter(c => c && !NON_ISSUE_VALUES.has(c.toUpperCase()));
-        const commentsHtml = comments.length
-            ? `<div class="audit-comments">${comments.map(c => `<p>${escapeHtml(c)}</p>`).join('')}</div>`
-            : '';
-
-        return `<div class="audit-row">
-            <div class="audit-head">
-                <span>${escapeHtml(r['WEEKENDING'])} · ${escapeHtml(r['FORM TYPE'])} · ${escapeHtml(r['LINE OF BUSINESS'] || r['BRAND'])}</span>
-                <span class="score-pill ${passed ? 'pass-pill' : 'fail-pill'}">${score === null ? '-' : score + '%'}</span>
-            </div>
-            <div class="audit-meta">Team Leader: ${escapeHtml(r['TEAM LEADER']) || '—'} · Cluster: ${escapeHtml(r['CLUSTER']) || '—'} · Month: ${escapeHtml(r['MONTH']) || '—'}</div>
-            <div>${tagsHtml}</div>
-            ${commentsHtml}
-        </div>`;
-    };
-
-    const groups = {};
-    sorted.forEach(r => {
-        const m = normVal(r['MONTH']) || 'UNSPECIFIED';
-        if (!groups[m]) groups[m] = [];
-        groups[m].push(r);
-    });
-
-    const orderedMonths = Object.keys(groups).sort((a, b) => {
-        const aMax = groups[a].reduce((mx, r) => String(r['WEEKENDING'] || '') > mx ? String(r['WEEKENDING'] || '') : mx, '');
-        const bMax = groups[b].reduce((mx, r) => String(r['WEEKENDING'] || '') > mx ? String(r['WEEKENDING'] || '') : mx, '');
-        return bMax.localeCompare(aMax);
-    });
-
-    const agentAuditList = document.getElementById('agentAuditList');
-    if (agentAuditList) {
-        agentAuditList.innerHTML = orderedMonths.map((month, idx) => {
-            const rows = groups[month];
-            const monthAvg = (() => {
-                const vals = rows.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
-                return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
-            })();
-            return `<details class="month-group" ${idx === 0 ? 'open' : ''}>
-                <summary class="month-summary">
-                    <span>${month} <span class="month-count">(${rows.length} audit${rows.length === 1 ? '' : 's'})</span></span>
-                    <span class="month-avg">${monthAvg === null ? '' : 'avg ' + monthAvg + '%'}</span>
-                </summary>
-                <div class="month-body">${rows.map(auditRowHtml).join('')}</div>
-            </details>`;
-        }).join('');
-    }
+    document.getElementById('agentScorecard').innerHTML = ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'].map(k => 
+        `<div class="score-tile"><div class="num">${avg(k)}</div><div class="lbl">${k}</div></div>`
+    ).join('');
 }
 
-/* ==========================================================================
-   GLOBAL EXPORTS & INITIALIZATION
-   ========================================================================== */
 window.switchAuthTab = switchAuthTab;
 window.setSignupRole = setSignupRole;
 window.handleSignup = handleSignup;
@@ -1140,6 +626,4 @@ window.resetFilters = resetFilters;
 window.toggleUploadPanel = toggleUploadPanel;
 window.handleRosterUpload = handleRosterUpload;
 window.handleDataUpload = handleDataUpload;
-window.resyncAgentEmails = resyncAgentEmails;
-
 setSignupRole('agent');
