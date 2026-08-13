@@ -179,47 +179,30 @@
             <div class="tables-grid">
                 <div class="card-table">
                     <h3>Pass Rate %</h3>
-                    <table class="excel-table">
-                        <thead><tr><th>Row Labels</th><th>PASSED</th><th>FAILED</th><th>Total</th></tr></thead>
-                        <tbody>
-                            <tr class="total-row">
-                                <td>Grand Total</td>
-                                <td id="totalPassRateVal">-</td>
-                                <td id="totalFailRateVal">-</td>
-                                <td>100%</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div style="overflow-x:auto;">
+                        <table class="excel-table summary-detail-table">
+                            <thead><tr><th>Row Labels</th><th>PASSED</th><th>FAILED</th><th>Total</th></tr></thead>
+                            <tbody id="passRateSummaryBody"><tr><td colspan="4" class="empty-note">Upload data to populate.</td></tr></tbody>
+                        </table>
+                    </div>
                 </div>
                 <div class="card-table">
                     <h3>Number of Audits (by Tenure)</h3>
-                    <table class="excel-table">
-                        <thead><tr><th>Row Labels</th><th>0-30</th><th>31-90</th><th>&gt;91 Days</th><th>Total</th></tr></thead>
-                        <tbody>
-                            <tr class="total-row">
-                                <td>Grand Total</td>
-                                <td id="totalAuditNhip">-</td>
-                                <td id="totalAudit31">-</td>
-                                <td id="totalAudit91">-</td>
-                                <td id="totalAuditTotal">-</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div style="overflow-x:auto;">
+                        <table class="excel-table summary-detail-table">
+                            <thead><tr><th>Row Labels</th><th>NCIP</th><th>NHIP</th><th>0-30 Days</th><th>31-60 Days</th><th>61-90 Days</th><th>&gt;91 Days</th><th>Grand Total</th></tr></thead>
+                            <tbody id="auditCountSummaryBody"><tr><td colspan="8" class="empty-note">Upload data to populate.</td></tr></tbody>
+                        </table>
+                    </div>
                 </div>
                 <div class="card-table">
                     <h3>Average QA Scores (by Tenure)</h3>
-                    <table class="excel-table">
-                        <thead><tr><th>Row Labels</th><th>0-30</th><th>31-90</th><th>&gt;91 Days</th><th>Total</th></tr></thead>
-                        <tbody>
-                            <tr class="total-row">
-                                <td>Grand Total</td>
-                                <td id="totalAvgNhip">-</td>
-                                <td id="totalAvg31">-</td>
-                                <td id="totalAvg91">-</td>
-                                <td id="totalAvgTotal">-</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div style="overflow-x:auto;">
+                        <table class="excel-table summary-detail-table">
+                            <thead><tr><th>Row Labels</th><th>NCIP</th><th>NHIP</th><th>0-30 Days</th><th>31-60 Days</th><th>61-90 Days</th><th>&gt;91 Days</th><th>Grand Total</th></tr></thead>
+                            <tbody id="averageScoreSummaryBody"><tr><td colspan="8" class="empty-note">Upload data to populate.</td></tr></tbody>
+                        </table>
+                    </div>
                 </div>
                 <div class="card-table">
                     <h3>CM Distribution</h3>
