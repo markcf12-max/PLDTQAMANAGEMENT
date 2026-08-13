@@ -100,7 +100,7 @@
             <div class="auth-msg" id="signupMsg"></div>
 
             <div class="auth-hint">
-                Agent sign-up only succeeds if your email already appears on the roster a Quality account has uploaded. Team Leader and Quality accounts need an invite code from your admin (defaults: <code>PLDT-TL-2026</code> / <code>PLDT-QA-2026</code> — change these in <code>script.js</code> before real use).
+                Agent sign-up only succeeds if your email already appears on the roster a Quality account has uploaded. Team Leader and Quality accounts need an invite code from your admin (defaults: <code>PLDT-TL-2026</code> / <code>PLDT-QA-2026</code>).
             </div>
         </div>
     </div>
@@ -177,8 +177,8 @@
                         <input type="file" id="dataFileInput" accept=".csv,.xlsx,.xls" onchange="handleDataUpload(event)">
                     </div>
                     <div class="file-status" id="dataStatus">No audit data loaded yet.</div>
-                    <button class="btn-upload" style="background:#1a1a1a;border-color:#1a1a1a;" onclick="resyncAgentEmails()">🔄 Re-sync Agent Matching</button>
-                    <div class="file-status" id="resyncStatus">Use this if agents uploaded/updated after data was already loaded, or if an agent can't see rows that should be theirs.</div>
+                    <button class="btn-upload" style="background:#1a1a1a;border-color:#1a1a1a;margin-top:8px;" onclick="resyncAgentEmails()">🔄 Re-sync Agent Matching</button>
+                    <div class="file-status" id="resyncStatus">Use this if agents uploaded/updated after data was already loaded.</div>
                 </div>
             </div>
         </div>
