@@ -552,3 +552,11 @@ footer.disclaimer {
     background: #fff;
     border-top: 1px solid #eee;
 }
+
+/* Detailed LOB summary tables */
+.summary-detail-table { min-width: 100%; white-space: nowrap; }
+.summary-detail-table th:first-child,
+.summary-detail-table td:first-child { text-align: left; min-width: 145px; }
+.summary-detail-table tbody tr:not(.total-row):hover { background: #fff5f6; }
+.tables-grid .card-table:nth-child(2),
+.tables-grid .card-table:nth-child(3) { overflow: hidden; }
