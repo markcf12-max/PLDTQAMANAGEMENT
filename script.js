@@ -713,10 +713,15 @@ function filterData() {
     renderSupervisorDashboard(filtered);
 }
 
+/* ==========================================================================
+   SUPERVISOR DASHBOARD & FILTERS (Updated for Robust Matching)
+   ========================================================================== */
+
 function tenureBucket(tenureStr) {
     const t = normVal(tenureStr);
-    if (t.includes('0-30')) return 'b1';
-    if (t.includes('31-60') || t.includes('61-90') || t.includes('31-90')) return 'b2';
+    if (!t) return 'b3'; // Default to >91 Days if blank
+    if (t.includes('0-30') || t.includes('0 TO 30') || t.includes('NEW HIRE') || t.includes('NHIP')) return 'b1';
+    if (t.includes('31') || t.includes('60') || t.includes('90') || t.includes('31-60') || t.includes('61-90') || t.includes('31-90')) return 'b2';
     return 'b3';
 }
 
@@ -767,21 +772,11 @@ function renderGroupedBarChart(data) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            layout: {
-                padding: {
-                    top: 20,
-                    bottom: 10
-                }
-            },
+            layout: { padding: { top: 20, bottom: 10 } },
             plugins: {
                 legend: {
                     position: 'top',
-                    labels: {
-                        usePointStyle: true,
-                        pointStyle: 'rect',
-                        padding: 15,
-                        font: { size: 10, weight: 'bold' }
-                    }
+                    labels: { usePointStyle: true, pointStyle: 'rect', padding: 15, font: { size: 10, weight: 'bold' } }
                 },
                 datalabels: {
                     anchor: 'end',
@@ -793,19 +788,10 @@ function renderGroupedBarChart(data) {
                 }
             },
             scales: {
-                y: {
-                    display: false,
-                    max: 115
-                },
+                y: { display: false, max: 115 },
                 x: {
                     grid: { display: false },
-                    ticks: { 
-                        font: { size: 9, weight: '600' }, 
-                        color: '#333',
-                        maxRotation: 45,
-                        minRotation: 0,
-                        autoSkip: false
-                    }
+                    ticks: { font: { size: 9, weight: '600' }, color: '#333', maxRotation: 45, minRotation: 0, autoSkip: false }
                 }
             }
         }
@@ -839,25 +825,27 @@ function renderSupervisorDashboard(data) {
 
     renderGroupedBarChart(data);
 
-    const avg = (key) => {
-        const vals = data.map(r => r[key]).filter(v => v !== null && v !== undefined && !isNaN(v));
-        if (!vals.length) return null;
-        return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+    // Pass Rate Calculation (Checks explicit PassRate column or falls back to Overall Score >= 85)
+    const isPassed = (r) => {
+        const pr = normVal(r['OVERALL PASSRATE']);
+        if (pr === 'PASSED' || pr === 'PASS' || pr === 'YES' || pr === '1') return true;
+        if (pr === 'FAILED' || pr === 'FAIL' || pr === 'NO' || pr === '0') return false;
+        const score = parseFloat(r['OVERALL SCORE']);
+        return !isNaN(score) && score >= 85;
     };
 
-    const avgOverall = avg('OVERALL SCORE');
-
-    const isPassed = (r) => r['OVERALL PASSRATE'] ? r['OVERALL PASSRATE'] === 'PASSED' : (r['OVERALL SCORE'] || 0) >= 85;
     const passed = data.filter(isPassed).length;
     const passPct = Math.round((passed / data.length) * 100);
 
     if (totalPassRateVal) totalPassRateVal.textContent = passPct + '%';
     if (totalFailRateVal) totalFailRateVal.textContent = (100 - passPct) + '%';
 
+    // Tenure Buckets
     const buckets = { b1: [], b2: [], b3: [] };
     data.forEach(r => buckets[tenureBucket(r['AGENT TENURE'])].push(r));
+
     const bucketAvg = (arr) => {
-        const vals = arr.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
+        const vals = arr.map(r => parseFloat(r['OVERALL SCORE'])).filter(v => !isNaN(v));
         return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) + '%' : '-';
     };
 
@@ -866,14 +854,22 @@ function renderSupervisorDashboard(data) {
     setText('totalAudit31', buckets.b2.length || '-');
     setText('totalAudit91', buckets.b3.length || '-');
     setText('totalAuditTotal', data.length);
+
     setText('totalAvgNhip', bucketAvg(buckets.b1));
     setText('totalAvg31', bucketAvg(buckets.b2));
     setText('totalAvg91', bucketAvg(buckets.b3));
-    setText('totalAvgTotal', avgOverall === null ? '-' : avgOverall + '%');
+    
+    const allScores = data.map(r => parseFloat(r['OVERALL SCORE'])).filter(v => !isNaN(v));
+    const overallAvgNum = allScores.length ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : null;
+    setText('totalAvgTotal', overallAvgNum === null ? '-' : overallAvgNum + '%');
 
-    const cmRows = data.filter(r => r['CM']);
+    // CM Distribution
+    const cmRows = data.filter(r => r['CM'] !== undefined && r['CM'] !== null && String(r['CM']).trim() !== '');
     if (cmRows.length) {
-        const superstar = cmRows.filter(r => r['CM'] === 'SUPERSTAR').length;
+        const superstar = cmRows.filter(r => {
+            const val = normVal(r['CM']);
+            return val.includes('SUPERSTAR') || val === 'SS' || val === 'HIGH';
+        }).length;
         if (cmSuperstarVal) cmSuperstarVal.textContent = Math.round((superstar / cmRows.length) * 100) + '%';
         if (cmUnderperformerVal) cmUnderperformerVal.textContent = Math.round(((cmRows.length - superstar) / cmRows.length) * 100) + '%';
     } else {
@@ -881,12 +877,14 @@ function renderSupervisorDashboard(data) {
         if (cmUnderperformerVal) cmUnderperformerVal.textContent = '-';
     }
 
+    // Team Leader Scores
     const tlScores = {};
     data.forEach(r => {
         const tl = r['TEAM LEADER'] || 'Unassigned';
         if (!tlScores[tl]) tlScores[tl] = { total: 0, count: 0 };
-        if (r['OVERALL SCORE'] !== null && r['OVERALL SCORE'] !== undefined && !isNaN(r['OVERALL SCORE'])) {
-            tlScores[tl].total += r['OVERALL SCORE'];
+        const score = parseFloat(r['OVERALL SCORE']);
+        if (!isNaN(score)) {
+            tlScores[tl].total += score;
             tlScores[tl].count++;
         }
     });
@@ -901,6 +899,7 @@ function renderSupervisorDashboard(data) {
         }).join('') || '<div class="empty-note">No matching data.</div>';
     }
 
+    // Top Hit Parameters
     const hitCounts = {};
     data.forEach(r => {
         getRowIssues(r).forEach(issue => {
