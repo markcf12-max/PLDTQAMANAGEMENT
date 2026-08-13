@@ -528,7 +528,9 @@ async function handleRosterUpload(event) {
         await batchWriteDocs('roster', roster, (r) => r.email);
 
         const withSupervisor = roster.filter(r => r.teamLeader).length;
-        if (rosterStatus) rosterStatus.innerHTML = `✅ Roster uploaded: ${roster.length} agents; ${withSupervisor} with Supervisor/Team Leader.${supervisorKey ? ` Detected column: ${escapeHtml(supervisorKey)}` : ' No supervisor column detected.'}`;
+        if (rosterStatus) rosterStatus.innerHTML = `✅ Roster uploaded: ${roster.length} agents; ${withSupervisor} with Supervisor/Team Leader.${supervisorKey ? ` Detected column: ${escapeHtml(supervisorKey)}` : ' No supervisor column detected.'} Auto-syncing existing audits...`;
+        await resyncAgentEmails();
+        if (rosterStatus) rosterStatus.innerHTML = `✅ Roster uploaded: ${roster.length} agents; ${withSupervisor} with Supervisor/Team Leader. Existing audits were automatically synchronized.`;
     } catch (err) {
         console.error(err);
         if (rosterStatus) rosterStatus.innerHTML = `⚠️ Roster upload failed: ${err.message}`;
@@ -672,10 +674,13 @@ function scoreSafeSecure(row) {
         'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER?',
         'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES'
     ];
-    const applicable = fields.map(f => normVal(row[f])).filter(v => v && v !== 'NA' && v !== 'N/A');
+    const excluded = new Set(['', 'NA', 'N/A', 'N.A.', '-', '--', 'NOT APPLICABLE']);
+    const applicable = fields
+        .map(f => normVal(row[f]).replace(/\s+/g, ' ').trim())
+        .filter(v => !excluded.has(v));
     if (!applicable.length) return 1;
-    const compliant = new Set(['YES', 'NO OPPORTUNITY']);
-    return applicable.filter(v => compliant.has(v)).length / applicable.length;
+    const isCompliant = v => v === 'YES' || v === 'Y' || v.startsWith('NO OPPORTUNITY');
+    return applicable.filter(isCompliant).length / applicable.length;
 }
 
 function parseUploadDate(value) {
@@ -789,7 +794,10 @@ async function handleDataUpload(event) {
         }).filter(r => String(r['AGENT/OFFICER NAME'] || '').trim());
         await replaceAuditData(processed);
         cachedAuditRows = processed;
-        if (dataStatus) dataStatus.innerHTML = `✅ Uploaded ${processed.length} audit records and automatically calculated ${calculatedCount} scores. Extra raw-file columns were ignored. Team Leader was filled from the raw file or the roster Supervisor column.`;
+        const safeValues = processed.map(r => r['SAFE & SECURE']).filter(v => v !== null && v !== undefined && !isNaN(v));
+        const safeAverage = safeValues.length ? Math.round(safeValues.reduce((a, b) => a + Number(b), 0) / safeValues.length) : 0;
+        const leaderRows = processed.filter(r => String(r['TEAM LEADER'] || '').trim()).length;
+        if (dataStatus) dataStatus.innerHTML = `✅ Uploaded and fully synchronized ${processed.length} audits. Safe & Secure average: ${safeAverage}%. Team Leader matched: ${leaderRows}/${processed.length}. No manual re-sync is required.`;
         populateDropdownOptions(processed);
         filterData();
     } catch (err) {
