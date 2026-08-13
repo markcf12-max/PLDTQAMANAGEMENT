@@ -618,9 +618,17 @@ async function handleDataUpload(event) {
             return out;
         }).filter(r => r['AGENT/OFFICER NAME']);
 
+        // --- Diagnostics: show parsed headers and a preview of processed rows ---
+        console.log('Parsed headers:', Object.keys(rows[0] || {}));
+        console.log('handleDataUpload — processed rows:', processed.length, processed[0] || null);
+        // ---------------------------------------------------------------
+
         await replaceAuditData(processed);
 
         cachedAuditRows = processed;
+        // quick check that cache was set
+        console.log('cachedAuditRows length', cachedAuditRows.length);
+
         if (dataStatus) dataStatus.innerHTML = `✅ Successfully uploaded ${processed.length} audit records.`;
         
         populateDropdownOptions(processed);
@@ -643,12 +651,21 @@ function populateDropdownOptions(rows) {
         selectTenure: 'AGENT TENURE',
         selectTeamLeader: 'TEAM LEADER'
     };
+
     Object.entries(map).forEach(([selId, field]) => {
         const sel = document.getElementById(selId);
         if (!sel) return;
         const current = sel.value;
-        const uniques = [...new Set(rows.map(r => r[field] || r['BRAND']).filter(Boolean))].sort();
-        sel.innerHTML = `<option value="ALL">(All)</option>` + uniques.map(v => `<option value="${v}">${v}</option>`).join('');
+
+        let uniques;
+        if (field === 'LINE OF BUSINESS') {
+            // For LOB prefer LINE OF BUSINESS, otherwise fall back to BRAND
+            uniques = [...new Set(rows.map(r => (String(r['LINE OF BUSINESS'] || r['BRAND'] || '')).trim()).filter(Boolean))].sort();
+        } else {
+            uniques = [...new Set(rows.map(r => String(r[field] || '').trim()).filter(Boolean))].sort();
+        }
+
+        sel.innerHTML = `<option value="ALL">(All)</option>` + uniques.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
         if (uniques.includes(current)) sel.value = current;
     });
 }
