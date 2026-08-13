@@ -638,49 +638,43 @@ async function handleDataUpload(event) {
         const UPPERCASE_FIELDS = ['FORM TYPE', 'MONTH', 'AGENT TENURE', 'OVERALL PASSRATE', 'CM'];
         const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER', 'CLUSTER', 'WEEKENDING'];
 
-        const processed = rows.map(r => {
-          const out = {};
-          NEEDED_FIELDS.forEach(f => {
-            const h = headerMap[f];
-            out[f] = h ? r[h] : '';
-          });
+const processed = rows.map(r => {
+            const out = {};
+            NEEDED_FIELDS.forEach(f => {
+                const h = headerMap[f];
+                out[f] = h ? r[h] : '';
+            });
+            UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
+            TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
 
-          // If detectedScoreKey exists and original header wasn't matched, copy into canonical field
-          if (detectedScoreKey && !out['OVERALL SCORE']) {
-            out['OVERALL SCORE'] = r[detectedScoreKey] || '';
-          }
-          if (detectedPassKey && !out['OVERALL PASSRATE']) {
-            out['OVERALL PASSRATE'] = r[detectedPassKey] || '';
-          }
+            // 1. Parse individual category scores first (Removed 'OVERALL SCORE' from this loop)
+            ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE'].forEach(k => {
+                const n = parseFloat(out[k]);
+                out[k] = isNaN(n) ? null : (n <= 1 ? Math.round(n * 100) : Math.round(n));
+            });
 
-          UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
-          TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
+            // ====================================================================
+            // 2. AUTOMATICALLY CALCULATE OVERALL SCORE
+            // ====================================================================
+            
+// Calculate Custom Weighted Average based on the Excel generator formula
+const rel = out['RELIABLE'] || 0;
+const per = out['PERSONABLE'] || 0;
+const fst = out['FAST'] || 0;
+const saf = out['SAFE & SECURE'] || 0;
 
-          // Normalization: convert various score formats to percent
-          ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'].forEach(k => {
-            let raw = out[k];
-            if (typeof raw === 'string') raw = raw.replace('%', '').replace(',', '').trim();
-            let n = parseFloat(raw);
-            if (isNaN(n)) {
-              out[k] = null;
-              return;
-            }
-            // Normalize common score ranges to percent:
-            // - 0..1  => fraction (e.g. 0.85) -> 85%
-            // - >1..10 => score-out-of-10 (e.g. 7) -> 70%
-            // - >10 => already percent (e.g. 70 or 85) -> keep as-is
-            if (n <= 1) {
-              n = n * 100;
-            } else if (n > 1 && n <= 10) {
-              n = n * 10;
-            } else {
-              n = n;
-            }
-            out[k] = Math.round(n);
-          });
+out['OVERALL SCORE'] = Math.round((rel * 0.45) + (per * 0.45) + (fst * 0.05) + (saf * 0.05));
 
-          out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
-          return out;
+            // OPTION B: Sum (If the categories are already weighted points that add up to 100)
+            // out['OVERALL SCORE'] = rel + per + fst + saf;
+
+            // OPTION C: Custom Weighted Average (e.g., Reliable 40%, Personable 30%, Fast 10%, Safe 20%)
+            // out['OVERALL SCORE'] = Math.round((rel * 0.40) + (per * 0.30) + (fst * 0.10) + (saf * 0.20));
+
+            // ====================================================================
+
+            out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
+            return out;
         }).filter(r => r['AGENT/OFFICER NAME']);
 
         // --- diagnostics: parsed headers and preview ---
