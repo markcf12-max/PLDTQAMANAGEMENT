@@ -493,6 +493,7 @@ async function handleRosterUpload(event) {
         const emailKey = findHeader(rows[0], ['PLDT/SMART Domain v2', 'PLDT/SMART Domain', 'Domain', 'Email', 'Work Email', 'Conduent Email Address', 'Email Address']);
         const nameKey = findHeader(rows[0], ['Employee Name', 'Agent Name', 'AGENT/OFFICER NAME', 'Name', 'Full Name']);
         const idKey = findHeader(rows[0], ['Win ID', 'WIN ID', 'ID', 'Employee ID', 'Agent ID']);
+        const supervisorKey = findHeader(rows[0], ['Supervisor', 'Supervisor Name', 'Immediate Supervisor', 'Team Leader', 'TEAM LEADER', 'TL Name']);
 
         if (!emailKey || !nameKey) {
             throw new Error('Missing required Roster headers (Domain/Email and Agent Name).');
@@ -502,7 +503,8 @@ async function handleRosterUpload(event) {
             .map(r => ({
                 email: String(r[emailKey] || '').trim().toLowerCase(),
                 agentName: String(r[nameKey] || '').trim(),
-                agentId: idKey ? String(r[idKey] || '').trim() : ''
+                agentId: idKey ? String(r[idKey] || '').trim() : '',
+                teamLeader: supervisorKey ? String(r[supervisorKey] || '').trim() : ''
             }))
             .filter(r => r.email && r.agentName);
 
@@ -651,7 +653,8 @@ function scoreSafeSecure(row) {
     ];
     const applicable = fields.map(f => normVal(row[f])).filter(v => v && v !== 'NA' && v !== 'N/A');
     if (!applicable.length) return 1;
-    return applicable.filter(v => v === 'YES').length / applicable.length;
+    const compliant = new Set(['YES', 'NO OPPORTUNITY']);
+    return applicable.filter(v => compliant.has(v)).length / applicable.length;
 }
 
 function parseUploadDate(value) {
@@ -730,10 +733,13 @@ async function handleDataUpload(event) {
         if (missing.length) throw new Error('Missing required raw-data column(s): ' + missing.join(', '));
 
         const rosterSnap = await getDocs(collection(db, 'roster'));
-        const nameToEmail = {};
+        const nameToRoster = {};
         rosterSnap.forEach(d => {
             const data = d.data();
-            nameToEmail[normalizeName(data.agentName)] = d.id;
+            nameToRoster[normalizeName(data.agentName)] = {
+                email: d.id,
+                teamLeader: String(data.teamLeader || '').trim()
+            };
         });
         const UPPERCASE_FIELDS = ['FORM TYPE', 'AGENT TENURE'];
         const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER'];
@@ -754,12 +760,14 @@ async function handleDataUpload(event) {
             if (period.month) out['MONTH'] = period.month;
             calculatedCount++;
 
-            out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
+            const rosterMatch = nameToRoster[normalizeName(out['AGENT/OFFICER NAME'])] || {};
+            out.agentEmailLower = rosterMatch.email || '';
+            if (!String(out['TEAM LEADER'] || '').trim()) out['TEAM LEADER'] = rosterMatch.teamLeader || '';
             return out;
         }).filter(r => String(r['AGENT/OFFICER NAME'] || '').trim());
         await replaceAuditData(processed);
         cachedAuditRows = processed;
-        if (dataStatus) dataStatus.innerHTML = `✅ Uploaded ${processed.length} audit records and automatically calculated ${calculatedCount} scores. Extra raw-file columns were ignored.`;
+        if (dataStatus) dataStatus.innerHTML = `✅ Uploaded ${processed.length} audit records and automatically calculated ${calculatedCount} scores. Extra raw-file columns were ignored. Team Leader was filled from the raw file or the roster Supervisor column.`;
         populateDropdownOptions(processed);
         filterData();
     } catch (err) {
