@@ -1,4 +1,4 @@
-console.log("DEBUG FIRST ROW KEYS:", Object.keys(data[0]));
+
 console.log("DEBUG FIRST ROW VALUES:", data[0]);
 /* ==========================================================================
    FIREBASE IMPORTS
