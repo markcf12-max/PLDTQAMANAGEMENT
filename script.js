@@ -585,43 +585,91 @@ async function handleDataUpload(event) {
         const rows = await parseWorkbookFile(file, ['RAW', 'DATA']);
         if (!rows.length) throw new Error('Data file appears empty.');
 
+        // --- header detection + mapping (robust) ---
         const headerMap = {};
         NEEDED_FIELDS.forEach(f => {
-            const h = findHeader(rows[0], [f]);
-            if (h) headerMap[f] = h;
+          const h = findHeader(rows[0], [f]);
+          if (h) headerMap[f] = h;
         });
 
+        const sampleKeys = Object.keys(rows[0] || {});
+
+        function findByPatterns(patterns) {
+          return sampleKeys.find(k => patterns.some(p => new RegExp(p, 'i').test(k)));
+        }
+
+        // common variants to search for
+        const scoreCandidates = [
+          'OVERALL\\s*SCORE', 'OVERALL_SCORE', '^SCORE$', 'TOTAL\\s*SCORE', 'OVERALL', 'FINAL\\s*SCORE', 'SCORE\\s*\\(\\%\\)', 'SCORE\\s*%','OVERALL SCORE \\(\\%\\)'
+        ];
+        const passRateCandidates = [
+          'OVERALL\\s*PASSRATE', 'PASSRATE', 'PASS RATE', 'PASS_STATUS', 'PASSED', 'OVERALL PASS', 'PASS'
+        ];
+
+        let detectedScoreKey = headerMap['OVERALL SCORE'] || findByPatterns(scoreCandidates);
+        // fallback: find any key where at least one sample row has a numeric value
+        if (!detectedScoreKey) {
+          detectedScoreKey = sampleKeys.find(k => {
+            return rows.some(r => {
+              const v = r[k];
+              return v !== '' && !isNaN(parseFloat(String(v).replace(/%/g, '').replace(',', '')));
+            });
+          });
+        }
+
+        let detectedPassKey = headerMap['OVERALL PASSRATE'] || findByPatterns(passRateCandidates);
+
+        // log detection
+        console.log('Detected keys -> score:', detectedScoreKey, 'passrate:', detectedPassKey);
+
+        // ensure headerMap has entries for the expected names so downstream code works
+        if (detectedScoreKey) headerMap['OVERALL SCORE'] = detectedScoreKey;
+        if (detectedPassKey) headerMap['OVERALL PASSRATE'] = detectedPassKey;
+        // --- end detection ---
+
+        // ---- process rows into canonical fields (same as before, using headerMap) ----
         const rosterSnap = await getDocs(collection(db, 'roster'));
         const nameToEmail = {};
         rosterSnap.forEach(d => {
-            const data = d.data();
-            nameToEmail[normalizeName(data.agentName)] = d.id;
+          const data = d.data();
+          nameToEmail[normalizeName(data.agentName)] = d.id;
         });
 
         const UPPERCASE_FIELDS = ['FORM TYPE', 'MONTH', 'AGENT TENURE', 'OVERALL PASSRATE', 'CM'];
         const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER', 'CLUSTER', 'WEEKENDING'];
 
         const processed = rows.map(r => {
-            const out = {};
-            NEEDED_FIELDS.forEach(f => {
-                const h = headerMap[f];
-                out[f] = h ? r[h] : '';
-            });
-            UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
-            TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
+          const out = {};
+          NEEDED_FIELDS.forEach(f => {
+            const h = headerMap[f];
+            out[f] = h ? r[h] : '';
+          });
 
-            ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'].forEach(k => {
-                const n = parseFloat(out[k]);
-                out[k] = isNaN(n) ? null : (n <= 1 ? Math.round(n * 100) : Math.round(n));
-            });
-            out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
-            return out;
+          // If detectedScoreKey exists and original header wasn't matched, copy into canonical field
+          if (detectedScoreKey && !out['OVERALL SCORE']) {
+            out['OVERALL SCORE'] = r[detectedScoreKey] || '';
+          }
+          if (detectedPassKey && !out['OVERALL PASSRATE']) {
+            out['OVERALL PASSRATE'] = r[detectedPassKey] || '';
+          }
+
+          UPPERCASE_FIELDS.forEach(f => { out[f] = normVal(out[f]); });
+          TRIM_ONLY_FIELDS.forEach(f => { out[f] = String(out[f] || '').trim(); });
+
+          ['RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE'].forEach(k => {
+            let raw = out[k];
+            if (typeof raw === 'string') raw = raw.replace('%', '').replace(',', '').trim();
+            const n = parseFloat(raw);
+            out[k] = isNaN(n) ? null : (n <= 1 ? Math.round(n * 100) : Math.round(n));
+          });
+
+          out.agentEmailLower = nameToEmail[normalizeName(out['AGENT/OFFICER NAME'])] || '';
+          return out;
         }).filter(r => r['AGENT/OFFICER NAME']);
 
-        // --- Diagnostics: show parsed headers and a preview of processed rows ---
+        // --- diagnostics: parsed headers and preview ---
         console.log('Parsed headers:', Object.keys(rows[0] || {}));
         console.log('handleDataUpload — processed rows:', processed.length, processed[0] || null);
-        // ---------------------------------------------------------------
 
         await replaceAuditData(processed);
 
@@ -633,7 +681,7 @@ async function handleDataUpload(event) {
         // quick check that cache was set
         console.log('cachedAuditRows length', cachedAuditRows.length);
 
-        // small pass/fail diagnostic (uses same logic as UI)
+        // pass diagnostic (uses same logic as UI)
         const passDiag = (() => {
             const rowsArr = window.__cachedAuditRows || [];
             const isPassed = r => {
