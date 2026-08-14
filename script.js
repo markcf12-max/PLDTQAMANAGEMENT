@@ -53,31 +53,33 @@ async function clearCollection(collectionName) {
     await Promise.all(promises);
 }
 
-async function replaceAuditData(rows) {
+async function replaceAuditData(rows, onProgress = null) {
+    const report = (phase, done, total) => {
+        if (typeof onProgress === 'function') onProgress(phase, done, total);
+    };
     const metaRef = doc(db, 'meta', 'auditData');
     const metaSnap = await getDoc(metaRef);
     const prevCount = metaSnap.exists() ? (metaSnap.data().count || 0) : 0;
 
-    // Concurrent Deletion
-    const deletePromises = [];
+    report('Removing previous audit data', 0, prevCount);
     for (let i = 0; i < prevCount; i += 400) {
         const end = Math.min(i + 400, prevCount);
         const batch = writeBatch(db);
         for (let j = i; j < end; j++) batch.delete(doc(db, 'auditData', 'row_' + j));
-        deletePromises.push(batch.commit());
+        await batch.commit();
+        report('Removing previous audit data', end, prevCount);
+        await new Promise(resolve => setTimeout(resolve, 0));
     }
-    await Promise.all(deletePromises);
 
-    // Concurrent Insertion
-    const setPromises = [];
+    report('Uploading audit data', 0, rows.length);
     for (let i = 0; i < rows.length; i += 400) {
         const chunk = rows.slice(i, i + 400);
         const batch = writeBatch(db);
         chunk.forEach((row, idx) => batch.set(doc(db, 'auditData', 'row_' + (i + idx)), row));
-        setPromises.push(batch.commit());
+        await batch.commit();
+        report('Uploading audit data', Math.min(i + chunk.length, rows.length), rows.length);
+        await new Promise(resolve => setTimeout(resolve, 0));
     }
-    await Promise.all(setPromises);
-
     await setDoc(metaRef, { count: rows.length, updatedAt: Date.now() });
 }
 
@@ -444,8 +446,6 @@ function parseWorkbookFile(file, preferSheetKeywords = []) {
 
                 if (preferSheetKeywords && preferSheetKeywords.length > 0) {
                     const keywords = Array.isArray(preferSheetKeywords) ? preferSheetKeywords : [preferSheetKeywords];
-                    // Respect keyword priority. For raw audit uploads, prefer RAW first,
-                    // then DATA, and only use SHEET1 as a last fallback.
                     let found = null;
                     for (const kw of keywords) {
                         found = wb.SheetNames.find(n => n.trim().toUpperCase() === String(kw).trim().toUpperCase())
@@ -456,7 +456,19 @@ function parseWorkbookFile(file, preferSheetKeywords = []) {
                 }
 
                 const ws = wb.Sheets[sheetName];
-                const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+                // Some cleaned Excel files retain formatting through column XFD.
+                // Limit parsing to the last real header cell to avoid freezing the browser.
+                const ref = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+                let lastHeaderCol = 0;
+                Object.keys(ws).forEach(address => {
+                    if (address[0] === '!') return;
+                    const cell = XLSX.utils.decode_cell(address);
+                    if (cell.r === 0 && ws[address] && ws[address].v !== undefined && String(ws[address].v).trim() !== '') {
+                        lastHeaderCol = Math.max(lastHeaderCol, cell.c);
+                    }
+                });
+                const safeRange = { s: { r: 0, c: 0 }, e: { r: ref.e.r, c: lastHeaderCol } };
+                const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false, range: safeRange });
                 resolve(json);
             } catch (err) {
                 reject(err);
@@ -797,7 +809,11 @@ async function handleDataUpload(event) {
             if (!String(out['TEAM LEADER'] || '').trim()) out['TEAM LEADER'] = rosterMatch.teamLeader || '';
             return out;
         }).filter(r => String(r['AGENT/OFFICER NAME'] || '').trim());
-        await replaceAuditData(processed);
+        await replaceAuditData(processed, (phase, done, total) => {
+            if (!dataStatus) return;
+            const pct = total ? Math.round(done / total * 100) : 100;
+            dataStatus.textContent = `${phase}: ${done.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`;
+        });
         cachedAuditRows = processed;
         const safeValues = processed.map(r => r['SAFE & SECURE']).filter(v => v !== null && v !== undefined && !isNaN(v));
         const safeAverage = safeValues.length ? Math.round(safeValues.reduce((a, b) => a + Number(b), 0) / safeValues.length) : 0;
