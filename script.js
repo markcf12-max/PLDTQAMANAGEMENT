@@ -444,9 +444,14 @@ function parseWorkbookFile(file, preferSheetKeywords = []) {
 
                 if (preferSheetKeywords && preferSheetKeywords.length > 0) {
                     const keywords = Array.isArray(preferSheetKeywords) ? preferSheetKeywords : [preferSheetKeywords];
-                    const found = wb.SheetNames.find(n => 
-                        keywords.some(kw => n.toUpperCase().includes(kw.toUpperCase()))
-                    );
+                    // Respect keyword priority. For raw audit uploads, prefer RAW first,
+                    // then DATA, and only use SHEET1 as a last fallback.
+                    let found = null;
+                    for (const kw of keywords) {
+                        found = wb.SheetNames.find(n => n.trim().toUpperCase() === String(kw).trim().toUpperCase())
+                            || wb.SheetNames.find(n => n.toUpperCase().includes(String(kw).toUpperCase()));
+                        if (found) break;
+                    }
                     if (found) sheetName = found;
                 }
 
@@ -897,78 +902,6 @@ function tenureBucket(tenureStr) {
     return 'b3';
 }
 
-const TENURE_SUMMARY_KEYS = ['ncip', 'nhip', '0-30', '31-60', '61-90', '>91'];
-
-function detailedTenureBucket(value) {
-    const t = normVal(value).replace(/\s+/g, ' ');
-    if (t.includes('NCIP')) return 'ncip';
-    if (t.includes('NHIP') || t.includes('NESTING')) return 'nhip';
-    if (t.includes('0-30') || t.includes('0 - 30') || t.includes('0 TO 30')) return '0-30';
-    if (t.includes('31-60') || t.includes('31 - 60') || t.includes('31 TO 60')) return '31-60';
-    if (t.includes('61-90') || t.includes('61 - 90') || t.includes('61 TO 90')) return '61-90';
-    if (t.includes('>91') || t.includes('91+') || t.includes('MORE THAN 91') || t.includes('ABOVE 91')) return '>91';
-    return '>91';
-}
-
-function displayLob(row) {
-    return String(row['LINE OF BUSINESS'] || row['BRAND'] || 'Unspecified').trim() || 'Unspecified';
-}
-
-function numericAverage(rows, field) {
-    const values = rows.map(r => Number(r[field])).filter(Number.isFinite);
-    return values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : null;
-}
-
-function renderLobSummaryTables(data) {
-    const passBody = document.getElementById('passRateSummaryBody');
-    const countBody = document.getElementById('auditCountSummaryBody');
-    const avgBody = document.getElementById('averageScoreSummaryBody');
-    if (!passBody || !countBody || !avgBody) return;
-    if (!data.length) {
-        passBody.innerHTML = '<tr><td colspan="4" class="empty-note">No matching data.</td></tr>';
-        countBody.innerHTML = '<tr><td colspan="8" class="empty-note">No matching data.</td></tr>';
-        avgBody.innerHTML = '<tr><td colspan="8" class="empty-note">No matching data.</td></tr>';
-        return;
-    }
-    const byLob = {};
-    data.forEach(row => {
-        const lob = displayLob(row);
-        if (!byLob[lob]) byLob[lob] = [];
-        byLob[lob].push(row);
-    });
-    const lobs = Object.keys(byLob).sort((a, b) => a.localeCompare(b));
-    const passed = row => row['OVERALL PASSRATE']
-        ? normVal(row['OVERALL PASSRATE']) === 'PASSED'
-        : Number(row['OVERALL SCORE'] || 0) >= 90;
-    const passRow = (label, rows, total) => {
-        const passCount = rows.filter(passed).length;
-        const pass = rows.length ? Math.round(passCount / rows.length * 100) : 0;
-        return `<tr class="${total ? 'total-row' : ''}"><td>${escapeHtml(label)}</td><td>${pass}%</td><td>${100-pass}%</td><td>100%</td></tr>`;
-    };
-    passBody.innerHTML = lobs.map(lob => passRow(lob, byLob[lob], false)).join('') + passRow('Grand Total', data, true);
-
-    const bucketRows = rows => {
-        const buckets = Object.fromEntries(TENURE_SUMMARY_KEYS.map(k => [k, []]));
-        rows.forEach(r => buckets[detailedTenureBucket(r['AGENT TENURE'])].push(r));
-        return buckets;
-    };
-    const countRow = (label, rows, total) => {
-        const buckets = bucketRows(rows);
-        const values = TENURE_SUMMARY_KEYS.map(k => buckets[k].length || 0);
-        return `<tr class="${total ? 'total-row' : ''}"><td>${escapeHtml(label)}</td>${values.map(v => `<td>${v || ''}</td>`).join('')}<td>${rows.length}</td></tr>`;
-    };
-    countBody.innerHTML = lobs.map(lob => countRow(lob, byLob[lob], false)).join('') + countRow('Grand Total', data, true);
-
-    const avgRow = (label, rows, total) => {
-        const buckets = bucketRows(rows);
-        const values = TENURE_SUMMARY_KEYS.map(k => numericAverage(buckets[k], 'OVERALL SCORE'));
-        const overall = numericAverage(rows, 'OVERALL SCORE');
-        const cell = v => `<td>${v === null ? '' : v + '%'}</td>`;
-        return `<tr class="${total ? 'total-row' : ''}"><td>${escapeHtml(label)}</td>${values.map(cell).join('')}${cell(overall)}</tr>`;
-    };
-    avgBody.innerHTML = lobs.map(lob => avgRow(lob, byLob[lob], false)).join('') + avgRow('Grand Total', data, true);
-}
-
 function renderGroupedBarChart(data) {
     const canvas = document.getElementById('lobChartCanvas');
     if (!canvas) return;
@@ -1070,7 +1003,6 @@ function renderSupervisorDashboard(data) {
     const topHitsTable = document.getElementById('topHitsTable');
 
     const topHitsBody = topHitsTable ? (topHitsTable.querySelector('tbody') || topHitsTable) : null;
-    renderLobSummaryTables(data || []);
 
     if (!data || !data.length) {
         if (totalPassRateVal) totalPassRateVal.textContent = '-';
@@ -1094,6 +1026,32 @@ function renderSupervisorDashboard(data) {
         if (!vals.length) return null;
         return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
     };
+
+    const avgOverall = avg('OVERALL SCORE');
+
+    const isPassed = (r) => r['OVERALL PASSRATE'] ? r['OVERALL PASSRATE'] === 'PASSED' : (r['OVERALL SCORE'] || 0) >= 85;
+    const passed = data.filter(isPassed).length;
+    const passPct = Math.round((passed / data.length) * 100);
+
+    if (totalPassRateVal) totalPassRateVal.textContent = passPct + '%';
+    if (totalFailRateVal) totalFailRateVal.textContent = (100 - passPct) + '%';
+
+    const buckets = { b1: [], b2: [], b3: [] };
+    data.forEach(r => buckets[tenureBucket(r['AGENT TENURE'])].push(r));
+    const bucketAvg = (arr) => {
+        const vals = arr.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
+        return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) + '%' : '-';
+    };
+
+    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setText('totalAuditNhip', buckets.b1.length || '-');
+    setText('totalAudit31', buckets.b2.length || '-');
+    setText('totalAudit91', buckets.b3.length || '-');
+    setText('totalAuditTotal', data.length);
+    setText('totalAvgNhip', bucketAvg(buckets.b1));
+    setText('totalAvg31', bucketAvg(buckets.b2));
+    setText('totalAvg91', bucketAvg(buckets.b3));
+    setText('totalAvgTotal', avgOverall === null ? '-' : avgOverall + '%');
 
     const cmRows = data.filter(r => r['CM']);
     if (cmRows.length) {
