@@ -57,29 +57,52 @@ async function replaceAuditData(rows, onProgress = null) {
     const report = (phase, done, total) => {
         if (typeof onProgress === 'function') onProgress(phase, done, total);
     };
+
+    // Fires every 400-doc chunk concurrently (like batchWriteDocs) instead of
+    // waiting for each chunk's round-trip before starting the next one.
+    // Wall-clock time drops from "sum of every chunk's latency" to roughly
+    // "the slowest single chunk's latency".
+    async function commitChunksInParallel(phase, total, chunkCount, commitChunk) {
+        report(phase, 0, total);
+        let done = 0;
+        const promises = [];
+        for (let i = 0; i < chunkCount; i++) {
+            promises.push(
+                commitChunk(i).then((count) => {
+                    done += count;
+                    report(phase, done, total);
+                })
+            );
+        }
+        await Promise.all(promises);
+    }
+
     const metaRef = doc(db, 'meta', 'auditData');
     const metaSnap = await getDoc(metaRef);
     const prevCount = metaSnap.exists() ? (metaSnap.data().count || 0) : 0;
 
-    report('Removing previous audit data', 0, prevCount);
-    for (let i = 0; i < prevCount; i += 400) {
-        const end = Math.min(i + 400, prevCount);
-        const batch = writeBatch(db);
-        for (let j = i; j < end; j++) batch.delete(doc(db, 'auditData', 'row_' + j));
-        await batch.commit();
-        report('Removing previous audit data', end, prevCount);
-        await new Promise(resolve => setTimeout(resolve, 0));
+    if (prevCount > 0) {
+        const chunkCount = Math.ceil(prevCount / 400);
+        await commitChunksInParallel('Removing previous audit data', prevCount, chunkCount, (i) => {
+            const start = i * 400;
+            const end = Math.min(start + 400, prevCount);
+            const batch = writeBatch(db);
+            for (let j = start; j < end; j++) batch.delete(doc(db, 'auditData', 'row_' + j));
+            return batch.commit().then(() => end - start);
+        });
     }
 
-    report('Uploading audit data', 0, rows.length);
-    for (let i = 0; i < rows.length; i += 400) {
-        const chunk = rows.slice(i, i + 400);
-        const batch = writeBatch(db);
-        chunk.forEach((row, idx) => batch.set(doc(db, 'auditData', 'row_' + (i + idx)), row));
-        await batch.commit();
-        report('Uploading audit data', Math.min(i + chunk.length, rows.length), rows.length);
-        await new Promise(resolve => setTimeout(resolve, 0));
+    if (rows.length > 0) {
+        const chunkCount = Math.ceil(rows.length / 400);
+        await commitChunksInParallel('Uploading audit data', rows.length, chunkCount, (i) => {
+            const start = i * 400;
+            const chunk = rows.slice(start, start + 400);
+            const batch = writeBatch(db);
+            chunk.forEach((row, idx) => batch.set(doc(db, 'auditData', 'row_' + (start + idx)), row));
+            return batch.commit().then(() => chunk.length);
+        });
     }
+
     await setDoc(metaRef, { count: rows.length, updatedAt: Date.now() });
 }
 
@@ -458,15 +481,16 @@ function parseWorkbookFile(file, preferSheetKeywords = []) {
                 const ws = wb.Sheets[sheetName];
                 // Some cleaned Excel files retain formatting through column XFD.
                 // Limit parsing to the last real header cell to avoid freezing the browser.
+                // Only look at row-0 addresses directly instead of scanning every
+                // populated cell in the sheet (which scales with total rows x columns).
                 const ref = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
                 let lastHeaderCol = 0;
-                Object.keys(ws).forEach(address => {
-                    if (address[0] === '!') return;
-                    const cell = XLSX.utils.decode_cell(address);
-                    if (cell.r === 0 && ws[address] && ws[address].v !== undefined && String(ws[address].v).trim() !== '') {
-                        lastHeaderCol = Math.max(lastHeaderCol, cell.c);
+                for (let c = 0; c <= ref.e.c; c++) {
+                    const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+                    if (cell && cell.v !== undefined && String(cell.v).trim() !== '') {
+                        lastHeaderCol = c;
                     }
-                });
+                }
                 const safeRange = { s: { r: 0, c: 0 }, e: { r: ref.e.r, c: lastHeaderCol } };
                 const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false, range: safeRange });
                 resolve(json);
@@ -1010,9 +1034,66 @@ function renderGroupedBarChart(data) {
     });
 }
 
+function renderSummaryTables(data) {
+    const passBody = document.getElementById('passRateSummaryBody');
+    const auditBody = document.getElementById('auditCountSummaryBody');
+    const avgBody = document.getElementById('averageScoreSummaryBody');
+
+    if (!data || !data.length) {
+        if (passBody) passBody.innerHTML = '<tr><td colspan="4" class="empty-note">Upload data to populate.</td></tr>';
+        if (auditBody) auditBody.innerHTML = '<tr><td colspan="5" class="empty-note">Upload data to populate.</td></tr>';
+        if (avgBody) avgBody.innerHTML = '<tr><td colspan="5" class="empty-note">Upload data to populate.</td></tr>';
+        return;
+    }
+
+    // ---- Pass Rate % ----
+    const isPassed = (r) => r['OVERALL PASSRATE'] ? r['OVERALL PASSRATE'] === 'PASSED' : (r['OVERALL SCORE'] || 0) >= 85;
+    const passedCount = data.filter(isPassed).length;
+    const passPct = Math.round((passedCount / data.length) * 100);
+    if (passBody) {
+        passBody.innerHTML = `<tr class="total-row">
+            <td style="text-align:left;">Grand Total</td>
+            <td>${passPct}%</td>
+            <td>${100 - passPct}%</td>
+            <td>100%</td>
+        </tr>`;
+    }
+
+    // ---- Tenure buckets (0-30 / 31-90 / >91) shared by both remaining tables ----
+    const buckets = { b1: [], b2: [], b3: [] };
+    data.forEach(r => buckets[tenureBucket(r['AGENT TENURE'])].push(r));
+
+    const bucketAvgStr = (arr) => {
+        const vals = arr.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
+        return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) + '%' : '-';
+    };
+
+    // ---- Number of Audits (by Tenure) ----
+    if (auditBody) {
+        auditBody.innerHTML = `<tr class="total-row">
+            <td style="text-align:left;">Grand Total</td>
+            <td>${buckets.b1.length || '-'}</td>
+            <td>${buckets.b2.length || '-'}</td>
+            <td>${buckets.b3.length || '-'}</td>
+            <td>${data.length}</td>
+        </tr>`;
+    }
+
+    // ---- Average QA Scores (by Tenure) ----
+    if (avgBody) {
+        const overallVals = data.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
+        const totalAvg = overallVals.length ? Math.round(overallVals.reduce((a, b) => a + b, 0) / overallVals.length) + '%' : '-';
+        avgBody.innerHTML = `<tr class="total-row">
+            <td style="text-align:left;">Grand Total</td>
+            <td>${bucketAvgStr(buckets.b1)}</td>
+            <td>${bucketAvgStr(buckets.b2)}</td>
+            <td>${bucketAvgStr(buckets.b3)}</td>
+            <td>${totalAvg}</td>
+        </tr>`;
+    }
+}
+
 function renderSupervisorDashboard(data) {
-    const totalPassRateVal = document.getElementById('totalPassRateVal');
-    const totalFailRateVal = document.getElementById('totalFailRateVal');
     const cmSuperstarVal = document.getElementById('cmSuperstarVal');
     const cmUnderperformerVal = document.getElementById('cmUnderperformerVal');
     const leaderChart = document.getElementById('leaderChart');
@@ -1020,9 +1101,9 @@ function renderSupervisorDashboard(data) {
 
     const topHitsBody = topHitsTable ? (topHitsTable.querySelector('tbody') || topHitsTable) : null;
 
+    renderSummaryTables(data);
+
     if (!data || !data.length) {
-        if (totalPassRateVal) totalPassRateVal.textContent = '-';
-        if (totalFailRateVal) totalFailRateVal.textContent = '-';
         if (cmSuperstarVal) cmSuperstarVal.textContent = '-';
         if (cmUnderperformerVal) cmUnderperformerVal.textContent = '-';
         if (leaderChart) leaderChart.innerHTML = '<div class="empty-note">No matching data.</div>';
@@ -1036,38 +1117,6 @@ function renderSupervisorDashboard(data) {
     }
 
     renderGroupedBarChart(data);
-
-    const avg = (key) => {
-        const vals = data.map(r => r[key]).filter(v => v !== null && v !== undefined && !isNaN(v));
-        if (!vals.length) return null;
-        return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-    };
-
-    const avgOverall = avg('OVERALL SCORE');
-
-    const isPassed = (r) => r['OVERALL PASSRATE'] ? r['OVERALL PASSRATE'] === 'PASSED' : (r['OVERALL SCORE'] || 0) >= 85;
-    const passed = data.filter(isPassed).length;
-    const passPct = Math.round((passed / data.length) * 100);
-
-    if (totalPassRateVal) totalPassRateVal.textContent = passPct + '%';
-    if (totalFailRateVal) totalFailRateVal.textContent = (100 - passPct) + '%';
-
-    const buckets = { b1: [], b2: [], b3: [] };
-    data.forEach(r => buckets[tenureBucket(r['AGENT TENURE'])].push(r));
-    const bucketAvg = (arr) => {
-        const vals = arr.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
-        return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) + '%' : '-';
-    };
-
-    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-    setText('totalAuditNhip', buckets.b1.length || '-');
-    setText('totalAudit31', buckets.b2.length || '-');
-    setText('totalAudit91', buckets.b3.length || '-');
-    setText('totalAuditTotal', data.length);
-    setText('totalAvgNhip', bucketAvg(buckets.b1));
-    setText('totalAvg31', bucketAvg(buckets.b2));
-    setText('totalAvg91', bucketAvg(buckets.b3));
-    setText('totalAvgTotal', avgOverall === null ? '-' : avgOverall + '%');
 
     const cmRows = data.filter(r => r['CM']);
     if (cmRows.length) {
