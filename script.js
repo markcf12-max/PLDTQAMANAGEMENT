@@ -407,14 +407,14 @@ const HIT_PARAMS = [
     { col: 'Unfriendly/discourteous/sarcastic?', category: 'Personable', label: 'Unfriendly, discourteous, or sarcastic tone', type: 'descriptive' },
     { col: 'Sounded transactional or robotic?', category: 'Personable', label: 'Sounded transactional or robotic', type: 'descriptive' },
     { col: 'FAST: Were there other Agent factors observed that affected the customer experience?', category: 'Fast', label: 'Other agent factor slowed the resolution', type: 'descriptive' },
-    { col: 'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?', category: 'Safe & Secure', label: 'Customer authentication process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE DATA PRIVACY POLICY?', category: 'Safe & Secure', label: 'Data privacy policy not followed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?', category: 'Safe & Secure', label: 'Customer info not updated in tool', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE CSAT/NPS PROCESS?', category: 'Safe & Secure', label: 'CSAT/NPS process not followed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?', category: 'Safe & Secure', label: 'System documentation process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?', category: 'Safe & Secure', label: 'System tagging process missed', type: 'boolean', hitValue: 'NO' },
-    { col: 'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?', category: 'Safe & Secure', label: 'Grammar / prescribed language standard missed', type: 'boolean', hitValue: 'NO' },
-    { col: "IS THIS A POTENTIAL CUSTOMER MISTREAT?", category: 'Mistreat', label: 'Potential customer mistreat flagged', type: 'boolean', hitValue: 'YES' }
+    { col: 'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?', category: 'Safe & Secure', label: 'Customer authentication process missed', type: 'descriptive' },
+    { col: 'DID WE FOLLOW THE DATA PRIVACY POLICY?', category: 'Safe & Secure', label: 'Data privacy policy not followed', type: 'descriptive' },
+    { col: 'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?', category: 'Safe & Secure', label: 'Customer info not updated in tool', type: 'descriptive' },
+    { col: 'DID WE FOLLOW THE CSAT/NPS PROCESS?', category: 'Safe & Secure', label: 'CSAT/NPS process not followed', type: 'descriptive' },
+    { col: 'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?', category: 'Safe & Secure', label: 'System documentation process missed', type: 'descriptive' },
+    { col: 'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?', category: 'Safe & Secure', label: 'System tagging process missed', type: 'descriptive' },
+    { col: 'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?', category: 'Safe & Secure', label: 'Grammar / prescribed language standard missed', type: 'descriptive' },
+    { col: "IS THIS A POTENTIAL CUSTOMER MISTREAT?", category: 'Mistreat', label: 'Potential customer mistreat flagged', type: 'descriptive' }
 ];
 
 function escapeHtml(str) {
@@ -937,9 +937,11 @@ function filterData() {
 
 function tenureBucket(tenureStr) {
     const t = normVal(tenureStr);
+    if (t.includes('NCIP')) return 'ncip';
     if (t.includes('0-30')) return 'b1';
     if (t.includes('31-60') || t.includes('61-90') || t.includes('31-90')) return 'b2';
-    return 'b3';
+    if (t.includes('91')) return 'b3';
+    return 'other';
 }
 
 function renderGroupedBarChart(data) {
@@ -1041,8 +1043,8 @@ function renderSummaryTables(data) {
 
     if (!data || !data.length) {
         if (passBody) passBody.innerHTML = '<tr><td colspan="4" class="empty-note">Upload data to populate.</td></tr>';
-        if (auditBody) auditBody.innerHTML = '<tr><td colspan="5" class="empty-note">Upload data to populate.</td></tr>';
-        if (avgBody) avgBody.innerHTML = '<tr><td colspan="5" class="empty-note">Upload data to populate.</td></tr>';
+        if (auditBody) auditBody.innerHTML = '<tr><td colspan="7" class="empty-note">Upload data to populate.</td></tr>';
+        if (avgBody) avgBody.innerHTML = '<tr><td colspan="7" class="empty-note">Upload data to populate.</td></tr>';
         return;
     }
 
@@ -1059,8 +1061,8 @@ function renderSummaryTables(data) {
         </tr>`;
     }
 
-    // ---- Tenure buckets (0-30 / 31-90 / >91) shared by both remaining tables ----
-    const buckets = { b1: [], b2: [], b3: [] };
+    // ---- Tenure buckets (NCIP / 0-30 / 31-90 / >91 / Other) shared by both remaining tables ----
+    const buckets = { ncip: [], b1: [], b2: [], b3: [], other: [] };
     data.forEach(r => buckets[tenureBucket(r['AGENT TENURE'])].push(r));
 
     const bucketAvgStr = (arr) => {
@@ -1072,9 +1074,11 @@ function renderSummaryTables(data) {
     if (auditBody) {
         auditBody.innerHTML = `<tr class="total-row">
             <td style="text-align:left;">Grand Total</td>
+            <td>${buckets.ncip.length || '-'}</td>
             <td>${buckets.b1.length || '-'}</td>
             <td>${buckets.b2.length || '-'}</td>
             <td>${buckets.b3.length || '-'}</td>
+            <td>${buckets.other.length || '-'}</td>
             <td>${data.length}</td>
         </tr>`;
     }
@@ -1085,9 +1089,11 @@ function renderSummaryTables(data) {
         const totalAvg = overallVals.length ? Math.round(overallVals.reduce((a, b) => a + b, 0) / overallVals.length) + '%' : '-';
         avgBody.innerHTML = `<tr class="total-row">
             <td style="text-align:left;">Grand Total</td>
+            <td>${bucketAvgStr(buckets.ncip)}</td>
             <td>${bucketAvgStr(buckets.b1)}</td>
             <td>${bucketAvgStr(buckets.b2)}</td>
             <td>${bucketAvgStr(buckets.b3)}</td>
+            <td>${bucketAvgStr(buckets.other)}</td>
             <td>${totalAvg}</td>
         </tr>`;
     }
