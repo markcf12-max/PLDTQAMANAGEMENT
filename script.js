@@ -111,6 +111,7 @@ async function replaceAuditData(rows, onProgress = null) {
    ========================================================================== */
 let currentSession = null; // { uid, email, role, agentName, agentId }
 let cachedAuditRows = [];
+let lastUnmatchedRows = []; // { name, id, source: 'upload' | 'resync' }
 
 function getNormalizedRole(roleStr) {
     if (!roleStr) return '';
@@ -590,6 +591,28 @@ async function refreshRosterStatus() {
     }
 }
 
+/* ==========================================================================
+   UNMATCHED ROW REPORTING
+   ========================================================================== */
+function renderUnmatchedList(rows) {
+    const box = document.getElementById('unmatchedBox');
+    const body = document.getElementById('unmatchedList');
+    if (!box || !body) return;
+
+    if (!rows || !rows.length) {
+        box.style.display = 'none';
+        body.innerHTML = '';
+        return;
+    }
+
+    box.style.display = 'block';
+    body.innerHTML = `<div class="file-status" style="margin-bottom:6px;">⚠️ ${rows.length} row(s) could not be matched to the roster:</div>` +
+        rows.slice(0, 50).map(r =>
+            `<div class="file-status">• ${escapeHtml(r.name || '(no name)')} ${r.id ? '· ID: ' + escapeHtml(r.id) : '(no ID)'}</div>`
+        ).join('') +
+        (rows.length > 50 ? `<div class="file-status">…and ${rows.length - 50} more.</div>` : '');
+}
+
 async function resyncAgentEmails() {
     const statusEl = document.getElementById('resyncStatus');
     if (statusEl) statusEl.textContent = 'Re-syncing agent, email, and Team Leader matches...';
@@ -605,7 +628,8 @@ async function resyncAgentEmails() {
         });
         const dataSnap = await getDocs(collection(db, 'auditData'));
         const docs = dataSnap.docs;
-        let matched = 0, unmatched = 0, leaders = 0;
+        let matched = 0, unmatchedCount = 0, leaders = 0;
+        const unmatchedRows = [];
         const promises = [];
         for (let i = 0; i < docs.length; i += 400) {
             const chunk = docs.slice(i, i + 400);
@@ -616,7 +640,12 @@ async function resyncAgentEmails() {
                 const match = (id && byId[id]) || byName[normalizeName(row['AGENT/OFFICER NAME'])] || {};
                 const email = match.email || '';
                 const teamLeader = String(row['TEAM LEADER'] || match.teamLeader || '').trim();
-                if (email) matched++; else unmatched++;
+                if (email) {
+                    matched++;
+                } else {
+                    unmatchedCount++;
+                    unmatchedRows.push({ name: row['AGENT/OFFICER NAME'], id, source: 'resync' });
+                }
                 if (teamLeader) leaders++;
                 batch.update(doc(db, 'auditData', d.id), { agentEmailLower: email, 'TEAM LEADER': teamLeader });
             });
@@ -626,7 +655,9 @@ async function resyncAgentEmails() {
         await loadAllAuditData();
         populateDropdownOptions(cachedAuditRows);
         filterData();
-        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} agent matches, ${leaders} rows with Team Leader, ${unmatched} unmatched.`;
+        lastUnmatchedRows = unmatchedRows;
+        renderUnmatchedList(unmatchedRows);
+        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} agent matches, ${leaders} rows with Team Leader, ${unmatchedCount} unmatched.`;
     } catch (err) {
         console.error(err);
         if (statusEl) statusEl.textContent = '⚠️ Re-sync failed: ' + err.message;
@@ -811,6 +842,7 @@ async function handleDataUpload(event) {
         const UPPERCASE_FIELDS = ['FORM TYPE', 'AGENT TENURE'];
         const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER'];
         let calculatedCount = 0;
+        const unmatched = [];
         const processed = rows.map(r => {
             const out = {};
             NEEDED_FIELDS.forEach(f => {
@@ -831,6 +863,11 @@ async function handleDataUpload(event) {
             const rosterMatch = (auditId && idToRoster[auditId]) || nameToRoster[normalizeName(out['AGENT/OFFICER NAME'])] || {};
             out.agentEmailLower = rosterMatch.email || '';
             if (!String(out['TEAM LEADER'] || '').trim()) out['TEAM LEADER'] = rosterMatch.teamLeader || '';
+
+            if (!out.agentEmailLower) {
+                unmatched.push({ name: out['AGENT/OFFICER NAME'], id: auditId, source: 'upload' });
+            }
+
             return out;
         }).filter(r => String(r['AGENT/OFFICER NAME'] || '').trim());
         await replaceAuditData(processed, (phase, done, total) => {
@@ -843,6 +880,8 @@ async function handleDataUpload(event) {
         const safeAverage = safeValues.length ? Math.round(safeValues.reduce((a, b) => a + Number(b), 0) / safeValues.length) : 0;
         const leaderRows = processed.filter(r => String(r['TEAM LEADER'] || '').trim()).length;
         if (dataStatus) dataStatus.innerHTML = `✅ Uploaded and fully synchronized ${processed.length} audits. Safe & Secure average: ${safeAverage}%. Team Leader matched: ${leaderRows}/${processed.length}. No manual re-sync is required.`;
+        lastUnmatchedRows = unmatched;
+        renderUnmatchedList(unmatched);
         populateDropdownOptions(processed);
         filterData();
     } catch (err) {
@@ -898,6 +937,8 @@ function resetFilters() {
             const el = document.getElementById(id);
             if (el) el.value = 'ALL';
         });
+    const excludeToggle = document.getElementById('excludeUnmatchedToggle');
+    if (excludeToggle) excludeToggle.checked = false;
     filterData();
 }
 
@@ -922,6 +963,9 @@ function filterData() {
         teamLeader: getValue('selectTeamLeader')
     };
 
+    const excludeToggleEl = document.getElementById('excludeUnmatchedToggle');
+    const excludeUnmatched = excludeToggleEl ? excludeToggleEl.checked : false;
+
     const filtered = rows.filter(r => {
         const rLob = r['LINE OF BUSINESS'] || r['BRAND'] || '';
         return (f.formType === 'ALL' || r['FORM TYPE'] === f.formType) &&
@@ -929,7 +973,8 @@ function filterData() {
             (f.month === 'ALL' || r['MONTH'] === f.month) &&
             (f.weekending === 'ALL' || r['WEEKENDING'] === f.weekending) &&
             (f.tenure === 'ALL' || r['AGENT TENURE'] === f.tenure) &&
-            (f.teamLeader === 'ALL' || r['TEAM LEADER'] === f.teamLeader);
+            (f.teamLeader === 'ALL' || r['TEAM LEADER'] === f.teamLeader) &&
+            (!excludeUnmatched || !!r['agentEmailLower']);
     });
 
     renderSupervisorDashboard(filtered);
