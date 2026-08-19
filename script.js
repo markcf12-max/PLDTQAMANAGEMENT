@@ -459,42 +459,13 @@ function getRowIssues(row) {
 /* ==========================================================================
    WORKBOOK PARSER
    ========================================================================== */
-function parseWorkbookFile(file, preferSheetKeywords = []) {
+function readWorkbookFile(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
                 const data = new Uint8Array(e.target.result);
-                const wb = XLSX.read(data, { type: 'array' });
-                let sheetName = wb.SheetNames[0];
-
-                if (preferSheetKeywords && preferSheetKeywords.length > 0) {
-                    const keywords = Array.isArray(preferSheetKeywords) ? preferSheetKeywords : [preferSheetKeywords];
-                    let found = null;
-                    for (const kw of keywords) {
-                        found = wb.SheetNames.find(n => n.trim().toUpperCase() === String(kw).trim().toUpperCase())
-                            || wb.SheetNames.find(n => n.toUpperCase().includes(String(kw).toUpperCase()));
-                        if (found) break;
-                    }
-                    if (found) sheetName = found;
-                }
-
-                const ws = wb.Sheets[sheetName];
-                // Some cleaned Excel files retain formatting through column XFD.
-                // Limit parsing to the last real header cell to avoid freezing the browser.
-                // Only look at row-0 addresses directly instead of scanning every
-                // populated cell in the sheet (which scales with total rows x columns).
-                const ref = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
-                let lastHeaderCol = 0;
-                for (let c = 0; c <= ref.e.c; c++) {
-                    const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
-                    if (cell && cell.v !== undefined && String(cell.v).trim() !== '') {
-                        lastHeaderCol = c;
-                    }
-                }
-                const safeRange = { s: { r: 0, c: 0 }, e: { r: ref.e.r, c: lastHeaderCol } };
-                const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false, range: safeRange });
-                resolve(json);
+                resolve(XLSX.read(data, { type: 'array' }));
             } catch (err) {
                 reject(err);
             }
@@ -502,6 +473,54 @@ function parseWorkbookFile(file, preferSheetKeywords = []) {
         reader.onerror = reject;
         reader.readAsArrayBuffer(file);
     });
+}
+
+function sheetToJson(ws) {
+    // Some cleaned Excel files retain formatting through column XFD.
+    // Limit parsing to the last real header cell to avoid freezing the browser.
+    // Only look at row-0 addresses directly instead of scanning every
+    // populated cell in the sheet (which scales with total rows x columns).
+    const ref = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+    let lastHeaderCol = 0;
+    for (let c = 0; c <= ref.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+        if (cell && cell.v !== undefined && String(cell.v).trim() !== '') {
+            lastHeaderCol = c;
+        }
+    }
+    const safeRange = { s: { r: 0, c: 0 }, e: { r: ref.e.r, c: lastHeaderCol } };
+    return XLSX.utils.sheet_to_json(ws, { defval: '', raw: false, range: safeRange });
+}
+
+function resolveSheetName(wb, preferSheetKeywords) {
+    if (!preferSheetKeywords || !preferSheetKeywords.length) return wb.SheetNames[0] || null;
+    const keywords = Array.isArray(preferSheetKeywords) ? preferSheetKeywords : [preferSheetKeywords];
+    for (const kw of keywords) {
+        const found = wb.SheetNames.find(n => n.trim().toUpperCase() === String(kw).trim().toUpperCase())
+            || wb.SheetNames.find(n => n.toUpperCase().includes(String(kw).toUpperCase()));
+        if (found) return found;
+    }
+    return null;
+}
+
+async function parseWorkbookFile(file, preferSheetKeywords = []) {
+    const wb = await readWorkbookFile(file);
+    const sheetName = resolveSheetName(wb, preferSheetKeywords) || wb.SheetNames[0];
+    return sheetToJson(wb.Sheets[sheetName]);
+}
+
+// Reads several named sheet groups out of one workbook in a single pass.
+// sheetGroups: [{ key: 'active', keywords: ['ROSTER - ACTIVE', 'ROSTER'] }, ...]
+// Returns { active: [...rows], termed: [...rows] } — a group with no matching
+// sheet resolves to an empty array rather than throwing.
+async function parseWorkbookMultiSheet(file, sheetGroups) {
+    const wb = await readWorkbookFile(file);
+    const result = {};
+    sheetGroups.forEach(({ key, keywords }) => {
+        const sheetName = resolveSheetName(wb, keywords);
+        result[key] = sheetName ? sheetToJson(wb.Sheets[sheetName]) : [];
+    });
+    return result;
 }
 
 function findHeader(row, candidates) {
@@ -538,6 +557,37 @@ function normalizeEmployeeId(value) {
 /* ==========================================================================
    DATA UPLOADS & RESYNC
    ========================================================================== */
+function buildRosterEntries(rows, status) {
+    if (!rows.length) return { rows: [], error: null };
+
+    const emailKey = findHeader(rows[0], ['PLDT/SMART Domain v2', 'PLDT/SMART Domain', 'Domain', 'Email', 'Work Email', 'Conduent Email Address', 'Email Address']);
+    const nameKey = findHeader(rows[0], ['Employee Name', 'Agent Name', 'AGENT/OFFICER NAME', 'Name', 'Full Name']);
+    const idKey = findHeader(rows[0], ['Win ID', 'Winid', 'WIN ID', 'ID', 'Employee ID', 'Agent ID']);
+    const supervisorKey = findHeader(rows[0], ['Supervisor', 'Supervisor Name', 'Immediate Supervisor', 'Team Leader', 'TEAM LEADER', 'TL Name', 'Sup Name', 'Reporting Manager', 'Manager Name']) || findHeaderByWords(rows[0], [['supervisor'], ['team', 'leader'], ['reporting', 'manager'], ['manager', 'name']]);
+
+    if (!nameKey) {
+        return { rows: [], error: `Missing an Employee/Agent Name column on the ${status} sheet.` };
+    }
+
+    const entries = rows
+        .map(r => ({
+            email: emailKey ? String(r[emailKey] || '').trim().toLowerCase() : '',
+            agentName: String(r[nameKey] || '').trim(),
+            agentId: idKey ? String(r[idKey] || '').trim() : '',
+            teamLeader: supervisorKey ? String(r[supervisorKey] || '').trim() : '',
+            status
+        }))
+        .filter(r => r.agentName && (r.email || r.agentId));
+
+    return { rows: entries, error: null };
+}
+
+function rosterDocId(entry) {
+    if (entry.email) return entry.email;
+    if (entry.agentId) return 'id_' + normalizeEmployeeId(entry.agentId);
+    return 'name_' + normalizeName(entry.agentName).replace(/\s+/g, '_').toLowerCase();
+}
+
 async function handleRosterUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -545,34 +595,51 @@ async function handleRosterUpload(event) {
     if (rosterStatus) rosterStatus.textContent = 'Processing ' + file.name + '...';
 
     try {
-        const rows = await parseWorkbookFile(file, ['ROSTER', 'DOMAIN', 'MASTER']);
-        if (!rows.length) throw new Error('Excel file appears empty.');
+        // Reads BOTH the active-employee sheet and the termed/separated sheet
+        // (if present) so historical audits for agents who have since left
+        // still resolve to a Team Leader / status instead of showing up as
+        // "unmatched" and risking exclusion from score reporting.
+        const { active: activeRows, termed: termedRows } = await parseWorkbookMultiSheet(file, [
+            { key: 'active', keywords: ['ROSTER - ACTIVE', 'ROSTER', 'DOMAIN', 'MASTER'] },
+            { key: 'termed', keywords: ['TERMED', 'TERMINATED', 'SEPARATED', 'ATTRITION'] }
+        ]);
 
-        const emailKey = findHeader(rows[0], ['PLDT/SMART Domain v2', 'PLDT/SMART Domain', 'Domain', 'Email', 'Work Email', 'Conduent Email Address', 'Email Address']);
-        const nameKey = findHeader(rows[0], ['Employee Name', 'Agent Name', 'AGENT/OFFICER NAME', 'Name', 'Full Name']);
-        const idKey = findHeader(rows[0], ['Win ID', 'WIN ID', 'ID', 'Employee ID', 'Agent ID']);
-        const supervisorKey = findHeader(rows[0], ['Supervisor', 'Supervisor Name', 'Immediate Supervisor', 'Team Leader', 'TEAM LEADER', 'TL Name', 'Sup Name', 'Reporting Manager', 'Manager Name']) || findHeaderByWords(rows[0], [['supervisor'], ['team', 'leader'], ['reporting', 'manager'], ['manager', 'name']]);
-
-        if (!emailKey || !nameKey) {
-            throw new Error('Missing required Roster headers (Domain/Email and Agent Name).');
+        if (!activeRows.length && !termedRows.length) {
+            throw new Error('Excel file appears empty, or no Active/Termed roster sheet was found.');
         }
 
-        const roster = rows
-            .map(r => ({
-                email: String(r[emailKey] || '').trim().toLowerCase(),
-                agentName: String(r[nameKey] || '').trim(),
-                agentId: idKey ? String(r[idKey] || '').trim() : '',
-                teamLeader: supervisorKey ? String(r[supervisorKey] || '').trim() : ''
-            }))
-            .filter(r => r.email && r.agentName);
+        const activeResult = buildRosterEntries(activeRows, 'ACTIVE');
+        const termedResult = buildRosterEntries(termedRows, 'TERMED');
+
+        if (activeResult.error && !activeResult.rows.length && !termedResult.rows.length) {
+            throw new Error(activeResult.error);
+        }
+
+        // Active roster wins if the same person somehow appears on both sheets
+        // (e.g. a rehire, or a termination sheet that hasn't been trimmed yet).
+        const activeEmails = new Set(activeResult.rows.map(r => r.email).filter(Boolean));
+        const activeIds = new Set(activeResult.rows.map(r => normalizeEmployeeId(r.agentId)).filter(Boolean));
+        const activeNames = new Set(activeResult.rows.map(r => normalizeName(r.agentName)));
+
+        const termedDeduped = termedResult.rows.filter(r =>
+            !(r.email && activeEmails.has(r.email)) &&
+            !(r.agentId && activeIds.has(normalizeEmployeeId(r.agentId))) &&
+            !activeNames.has(normalizeName(r.agentName))
+        );
+
+        const roster = activeResult.rows.concat(termedDeduped);
+        if (!roster.length) {
+            throw new Error('No usable roster rows found (need at least a Name plus Email or ID).');
+        }
 
         await clearCollection('roster');
-        await batchWriteDocs('roster', roster, (r) => r.email);
+        await batchWriteDocs('roster', roster, rosterDocId);
 
         const withSupervisor = roster.filter(r => r.teamLeader).length;
-        if (rosterStatus) rosterStatus.innerHTML = `✅ Roster uploaded: ${roster.length} agents; ${withSupervisor} with Supervisor/Team Leader.${supervisorKey ? ` Detected column: ${escapeHtml(supervisorKey)}` : ' No supervisor column detected.'} Auto-syncing existing audits...`;
+        const summary = `✅ Roster uploaded: ${activeResult.rows.length} active + ${termedDeduped.length} termed = ${roster.length} agents; ${withSupervisor} with Supervisor/Team Leader.`;
+        if (rosterStatus) rosterStatus.innerHTML = `${summary} Auto-syncing existing audits...`;
         await resyncAgentEmails();
-        if (rosterStatus) rosterStatus.innerHTML = `✅ Roster uploaded: ${roster.length} agents; ${withSupervisor} with Supervisor/Team Leader. Existing audits were automatically synchronized.`;
+        if (rosterStatus) rosterStatus.innerHTML = `${summary} Existing audits were automatically synchronized.`;
     } catch (err) {
         console.error(err);
         if (rosterStatus) rosterStatus.innerHTML = `⚠️ Roster upload failed: ${err.message}`;
@@ -583,9 +650,18 @@ async function refreshRosterStatus() {
     try {
         const snap = await getDocs(collection(db, 'roster'));
         const rosterStatus = document.getElementById('rosterStatus');
-        if (rosterStatus) {
-            rosterStatus.innerHTML = snap.size ? `✅ Roster active: ${snap.size} agents.` : '⚠️ No roster records found.';
+        if (!rosterStatus) return;
+
+        if (!snap.size) {
+            rosterStatus.innerHTML = '⚠️ No roster records found.';
+            return;
         }
+
+        let active = 0, termed = 0;
+        snap.forEach(d => {
+            if (String(d.data().status || '').toUpperCase() === 'TERMED') termed++; else active++;
+        });
+        rosterStatus.innerHTML = `✅ Roster loaded: ${snap.size} agents (${active} active, ${termed} termed).`;
     } catch (err) {
         console.warn("Roster status read restricted or failed:", err);
     }
@@ -606,7 +682,7 @@ function renderUnmatchedList(rows) {
     }
 
     box.style.display = 'block';
-    body.innerHTML = `<div class="file-status" style="margin-bottom:6px;">⚠️ ${rows.length} row(s) could not be matched to the roster:</div>` +
+    body.innerHTML = `<div class="file-status" style="margin-bottom:6px;">⚠️ ${rows.length} row(s) are not on the Active or Termed roster:</div>` +
         rows.slice(0, 50).map(r =>
             `<div class="file-status">• ${escapeHtml(r.name || '(no name)')} ${r.id ? '· ID: ' + escapeHtml(r.id) : '(no ID)'}</div>`
         ).join('') +
@@ -615,13 +691,13 @@ function renderUnmatchedList(rows) {
 
 async function resyncAgentEmails() {
     const statusEl = document.getElementById('resyncStatus');
-    if (statusEl) statusEl.textContent = 'Re-syncing agent, email, and Team Leader matches...';
+    if (statusEl) statusEl.textContent = 'Re-syncing agent, email, status, and Team Leader matches...';
     try {
         const rosterSnap = await getDocs(collection(db, 'roster'));
         const byName = {}, byId = {};
         rosterSnap.forEach(d => {
             const x = d.data();
-            const item = { email: d.id, teamLeader: String(x.teamLeader || '').trim() };
+            const item = { email: x.email || '', teamLeader: String(x.teamLeader || '').trim(), status: x.status || '' };
             byName[normalizeName(x.agentName)] = item;
             const id = normalizeEmployeeId(x.agentId);
             if (id) byId[id] = item;
@@ -637,17 +713,18 @@ async function resyncAgentEmails() {
             chunk.forEach(d => {
                 const row = d.data();
                 const id = normalizeEmployeeId(row['EE number/ID number'] || row['WIN ID'] || row['ID']);
-                const match = (id && byId[id]) || byName[normalizeName(row['AGENT/OFFICER NAME'])] || {};
-                const email = match.email || '';
-                const teamLeader = String(row['TEAM LEADER'] || match.teamLeader || '').trim();
-                if (email) {
+                const match = (id && byId[id]) || byName[normalizeName(row['AGENT/OFFICER NAME'])] || null;
+                const email = match ? (match.email || '') : '';
+                const agentStatus = match ? (match.status || 'UNKNOWN') : 'UNKNOWN';
+                const teamLeader = String(row['TEAM LEADER'] || (match ? match.teamLeader : '') || '').trim();
+                if (match) {
                     matched++;
                 } else {
                     unmatchedCount++;
                     unmatchedRows.push({ name: row['AGENT/OFFICER NAME'], id, source: 'resync' });
                 }
                 if (teamLeader) leaders++;
-                batch.update(doc(db, 'auditData', d.id), { agentEmailLower: email, 'TEAM LEADER': teamLeader });
+                batch.update(doc(db, 'auditData', d.id), { agentEmailLower: email, 'TEAM LEADER': teamLeader, 'AGENT STATUS': agentStatus });
             });
             promises.push(batch.commit());
         }
@@ -657,7 +734,7 @@ async function resyncAgentEmails() {
         filterData();
         lastUnmatchedRows = unmatchedRows;
         renderUnmatchedList(unmatchedRows);
-        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} agent matches, ${leaders} rows with Team Leader, ${unmatchedCount} unmatched.`;
+        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} agent matches, ${leaders} rows with Team Leader, ${unmatchedCount} not on the roster.`;
     } catch (err) {
         console.error(err);
         if (statusEl) statusEl.textContent = '⚠️ Re-sync failed: ' + err.message;
@@ -834,7 +911,7 @@ async function handleDataUpload(event) {
         const nameToRoster = {}, idToRoster = {};
         rosterSnap.forEach(d => {
             const data = d.data();
-            const item = { email: d.id, teamLeader: String(data.teamLeader || '').trim() };
+            const item = { email: data.email || '', teamLeader: String(data.teamLeader || '').trim(), status: data.status || '' };
             nameToRoster[normalizeName(data.agentName)] = item;
             const rosterId = normalizeEmployeeId(data.agentId);
             if (rosterId) idToRoster[rosterId] = item;
@@ -860,11 +937,12 @@ async function handleDataUpload(event) {
             calculatedCount++;
 
             const auditId = normalizeEmployeeId(out['EE number/ID number'] || out['WIN ID'] || out['ID']);
-            const rosterMatch = (auditId && idToRoster[auditId]) || nameToRoster[normalizeName(out['AGENT/OFFICER NAME'])] || {};
-            out.agentEmailLower = rosterMatch.email || '';
-            if (!String(out['TEAM LEADER'] || '').trim()) out['TEAM LEADER'] = rosterMatch.teamLeader || '';
+            const rosterMatch = (auditId && idToRoster[auditId]) || nameToRoster[normalizeName(out['AGENT/OFFICER NAME'])] || null;
+            out.agentEmailLower = rosterMatch ? (rosterMatch.email || '') : '';
+            out['AGENT STATUS'] = rosterMatch ? (rosterMatch.status || 'UNKNOWN') : 'UNKNOWN';
+            if (!String(out['TEAM LEADER'] || '').trim()) out['TEAM LEADER'] = rosterMatch ? (rosterMatch.teamLeader || '') : '';
 
-            if (!out.agentEmailLower) {
+            if (!rosterMatch) {
                 unmatched.push({ name: out['AGENT/OFFICER NAME'], id: auditId, source: 'upload' });
             }
 
@@ -879,7 +957,9 @@ async function handleDataUpload(event) {
         const safeValues = processed.map(r => r['SAFE & SECURE']).filter(v => v !== null && v !== undefined && !isNaN(v));
         const safeAverage = safeValues.length ? Math.round(safeValues.reduce((a, b) => a + Number(b), 0) / safeValues.length) : 0;
         const leaderRows = processed.filter(r => String(r['TEAM LEADER'] || '').trim()).length;
-        if (dataStatus) dataStatus.innerHTML = `✅ Uploaded and fully synchronized ${processed.length} audits. Safe & Secure average: ${safeAverage}%. Team Leader matched: ${leaderRows}/${processed.length}. No manual re-sync is required.`;
+        const activeRows = processed.filter(r => r['AGENT STATUS'] === 'ACTIVE').length;
+        const termedRows = processed.filter(r => r['AGENT STATUS'] === 'TERMED').length;
+        if (dataStatus) dataStatus.innerHTML = `✅ Uploaded and fully synchronized ${processed.length} audits. Safe & Secure average: ${safeAverage}%. Team Leader matched: ${leaderRows}/${processed.length}. Roster status: ${activeRows} active, ${termedRows} termed, ${unmatched.length} not on roster. No manual re-sync is required.`;
         lastUnmatchedRows = unmatched;
         renderUnmatchedList(unmatched);
         populateDropdownOptions(processed);
@@ -932,13 +1012,11 @@ function toggleUploadPanel() {
 }
 
 function resetFilters() {
-    ['selectFormType', 'selectBrand', 'selectMonth', 'selectWeekending', 'selectTenure', 'selectTeamLeader']
+    ['selectFormType', 'selectBrand', 'selectMonth', 'selectWeekending', 'selectTenure', 'selectTeamLeader', 'selectAgentStatus']
         .forEach(id => {
             const el = document.getElementById(id);
             if (el) el.value = 'ALL';
         });
-    const excludeToggle = document.getElementById('excludeUnmatchedToggle');
-    if (excludeToggle) excludeToggle.checked = false;
     filterData();
 }
 
@@ -960,11 +1038,9 @@ function filterData() {
         month: getValue('selectMonth'),
         weekending: getValue('selectWeekending'),
         tenure: getValue('selectTenure'),
-        teamLeader: getValue('selectTeamLeader')
+        teamLeader: getValue('selectTeamLeader'),
+        agentStatus: getValue('selectAgentStatus')
     };
-
-    const excludeToggleEl = document.getElementById('excludeUnmatchedToggle');
-    const excludeUnmatched = excludeToggleEl ? excludeToggleEl.checked : false;
 
     const filtered = rows.filter(r => {
         const rLob = r['LINE OF BUSINESS'] || r['BRAND'] || '';
@@ -974,7 +1050,7 @@ function filterData() {
             (f.weekending === 'ALL' || r['WEEKENDING'] === f.weekending) &&
             (f.tenure === 'ALL' || r['AGENT TENURE'] === f.tenure) &&
             (f.teamLeader === 'ALL' || r['TEAM LEADER'] === f.teamLeader) &&
-            (!excludeUnmatched || !!r['agentEmailLower']);
+            (f.agentStatus === 'ALL' || (r['AGENT STATUS'] || 'UNKNOWN') === f.agentStatus);
     });
 
     renderSupervisorDashboard(filtered);
