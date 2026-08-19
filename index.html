@@ -148,10 +148,15 @@
                     </div>
                 </div>
                 <div class="filter-field">
-                    <label style="display:flex; align-items:center; gap:6px; cursor:pointer; text-transform:none; font-size:11px; color:#555;">
-                        <input type="checkbox" id="excludeUnmatchedToggle" onchange="filterData()">
-                        Exclude unmatched agents
-                    </label>
+                    <label>Employment Status</label>
+                    <div class="select-wrap">
+                        <select id="selectAgentStatus" onchange="filterData()">
+                            <option value="ALL">(All)</option>
+                            <option value="ACTIVE">Active</option>
+                            <option value="TERMED">Termed</option>
+                            <option value="UNKNOWN">Not on Roster</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
@@ -163,10 +168,11 @@
                 <div class="upload-section">
                     <h4>1. Agent Roster</h4>
                     <div class="upload-btn-wrapper">
-                        <button class="btn-upload">📇 Upload Roster (Email/Name/ID)</button>
+                        <button class="btn-upload">📇 Upload Roster (Active + Termed)</button>
                         <input type="file" id="rosterFileInput" accept=".csv,.xlsx,.xls" onchange="handleRosterUpload(event)">
                     </div>
                     <div class="file-status" id="rosterStatus">No roster loaded yet.</div>
+                    <div class="file-status">Reads both the Active roster sheet and the Termed sheet (if present), so historical audits for agents who've since left still match correctly.</div>
                 </div>
 
                 <div class="upload-section">
@@ -180,7 +186,7 @@
                 </div>
 
                 <div class="upload-section" id="unmatchedBox" style="display:none; text-align:left;">
-                    <h4>⚠️ Unmatched Rows</h4>
+                    <h4>⚠️ Not Found on Roster</h4>
                     <div id="unmatchedList" style="max-height:160px; overflow-y:auto;"></div>
                 </div>
             </div>
