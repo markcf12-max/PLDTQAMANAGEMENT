@@ -1116,9 +1116,11 @@ function filterData() {
 function tenureBucket(tenureStr) {
     const t = normVal(tenureStr);
     if (t.includes('NCIP')) return 'ncip';
-    if (t.includes('0-30')) return 'b1';
-    if (t.includes('31-60') || t.includes('61-90') || t.includes('31-90')) return 'b2';
-    if (t.includes('91')) return 'b3';
+    if (t.includes('NHIP')) return 'nhip';
+    if (t.includes('0-30')) return 'd0';
+    if (t.includes('31-60')) return 'd31';
+    if (t.includes('61-90')) return 'd61';
+    if (t.includes('>91') || t.includes('91')) return 'd91';
     return 'other';
 }
 
@@ -1219,60 +1221,102 @@ function renderSummaryTables(data) {
     const auditBody = document.getElementById('auditCountSummaryBody');
     const avgBody = document.getElementById('averageScoreSummaryBody');
 
+    const COLS = 9; // LOB label + NCIP + NHIP + 0-30 + 31-60 + 61-90 + >91 + Grand Total + pass/fail columns
     if (!data || !data.length) {
-        if (passBody) passBody.innerHTML = '<tr><td colspan="4" class="empty-note">Upload data to populate.</td></tr>';
-        if (auditBody) auditBody.innerHTML = '<tr><td colspan="7" class="empty-note">Upload data to populate.</td></tr>';
-        if (avgBody) avgBody.innerHTML = '<tr><td colspan="7" class="empty-note">Upload data to populate.</td></tr>';
+        if (passBody) passBody.innerHTML = `<tr><td colspan="4" class="empty-note">Upload data to populate.</td></tr>`;
+        if (auditBody) auditBody.innerHTML = `<tr><td colspan="8" class="empty-note">Upload data to populate.</td></tr>`;
+        if (avgBody) avgBody.innerHTML = `<tr><td colspan="8" class="empty-note">Upload data to populate.</td></tr>`;
         return;
     }
 
-    // ---- Pass Rate % ----
+    // ── helpers ──────────────────────────────────────────────────────────────
     const isPassed = (r) => r['OVERALL PASSRATE'] ? r['OVERALL PASSRATE'] === 'PASSED' : (r['OVERALL SCORE'] || 0) >= 85;
-    const passedCount = data.filter(isPassed).length;
-    const passPct = Math.round((passedCount / data.length) * 100);
+    const BUCKETS = ['ncip', 'nhip', 'd0', 'd31', 'd61', 'd91'];
+
+    function bucketRows(rows) {
+        const b = { ncip: [], nhip: [], d0: [], d31: [], d61: [], d91: [] };
+        rows.forEach(r => {
+            const k = tenureBucket(r['AGENT TENURE']);
+            if (b[k]) b[k].push(r); // ignore 'other' — lumped into grand total only
+        });
+        return b;
+    }
+
+    function countCell(arr) { return arr.length > 0 ? arr.length : '-'; }
+
+    function avgScore(arr) {
+        const vals = arr.map(r => Number(r['OVERALL SCORE'])).filter(v => !isNaN(v));
+        return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) + '%' : '-';
+    }
+
+    // Group data by LOB
+    const lobMap = {};
+    data.forEach(r => {
+        const lob = r['LINE OF BUSINESS'] || r['BRAND'] || 'Unspecified';
+        if (!lobMap[lob]) lobMap[lob] = [];
+        lobMap[lob].push(r);
+    });
+    const lobs = Object.keys(lobMap).sort();
+
+    // ── Pass Rate % table ─────────────────────────────────────────────────────
     if (passBody) {
-        passBody.innerHTML = `<tr class="total-row">
+        const lobRows = lobs.map(lob => {
+            const rows = lobMap[lob];
+            const passed = rows.filter(isPassed).length;
+            const pct = Math.round(passed / rows.length * 100);
+            return `<tr>
+                <td style="text-align:left;">${escapeHtml(lob)}</td>
+                <td>${pct}%</td>
+                <td>${100 - pct}%</td>
+                <td>100%</td>
+            </tr>`;
+        }).join('');
+
+        const totalPassed = data.filter(isPassed).length;
+        const totalPct = Math.round(totalPassed / data.length * 100);
+        passBody.innerHTML = lobRows + `<tr class="total-row">
             <td style="text-align:left;">Grand Total</td>
-            <td>${passPct}%</td>
-            <td>${100 - passPct}%</td>
+            <td>${totalPct}%</td>
+            <td>${100 - totalPct}%</td>
             <td>100%</td>
         </tr>`;
     }
 
-    // ---- Tenure buckets (NCIP / 0-30 / 31-90 / >91 / Other) shared by both remaining tables ----
-    const buckets = { ncip: [], b1: [], b2: [], b3: [], other: [] };
-    data.forEach(r => buckets[tenureBucket(r['AGENT TENURE'])].push(r));
-
-    const bucketAvgStr = (arr) => {
-        const vals = arr.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
-        return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) + '%' : '-';
-    };
-
-    // ---- Number of Audits (by Tenure) ----
+    // ── Number of Audits table ────────────────────────────────────────────────
     if (auditBody) {
-        auditBody.innerHTML = `<tr class="total-row">
+        const lobRows = lobs.map(lob => {
+            const b = bucketRows(lobMap[lob]);
+            return `<tr>
+                <td style="text-align:left;">${escapeHtml(lob)}</td>
+                ${BUCKETS.map(k => `<td>${countCell(b[k])}</td>`).join('')}
+                <td>${lobMap[lob].length}</td>
+            </tr>`;
+        }).join('');
+
+        const totalB = bucketRows(data);
+        auditBody.innerHTML = lobRows + `<tr class="total-row">
             <td style="text-align:left;">Grand Total</td>
-            <td>${buckets.ncip.length || '-'}</td>
-            <td>${buckets.b1.length || '-'}</td>
-            <td>${buckets.b2.length || '-'}</td>
-            <td>${buckets.b3.length || '-'}</td>
-            <td>${buckets.other.length || '-'}</td>
+            ${BUCKETS.map(k => `<td>${countCell(totalB[k])}</td>`).join('')}
             <td>${data.length}</td>
         </tr>`;
     }
 
-    // ---- Average QA Scores (by Tenure) ----
+    // ── Average OA Scores table ───────────────────────────────────────────────
     if (avgBody) {
-        const overallVals = data.map(r => r['OVERALL SCORE']).filter(v => v !== null && v !== undefined && !isNaN(v));
-        const totalAvg = overallVals.length ? Math.round(overallVals.reduce((a, b) => a + b, 0) / overallVals.length) + '%' : '-';
-        avgBody.innerHTML = `<tr class="total-row">
+        const lobRows = lobs.map(lob => {
+            const b = bucketRows(lobMap[lob]);
+            return `<tr>
+                <td style="text-align:left;">${escapeHtml(lob)}</td>
+                ${BUCKETS.map(k => `<td>${avgScore(b[k])}</td>`).join('')}
+                <td>${avgScore(lobMap[lob])}</td>
+            </tr>`;
+        }).join('');
+
+        const totalB = bucketRows(data);
+        avgBody.innerHTML = lobRows + `<tr class="total-row">
             <td style="text-align:left;">Grand Total</td>
-            <td>${bucketAvgStr(buckets.ncip)}</td>
-            <td>${bucketAvgStr(buckets.b1)}</td>
-            <td>${bucketAvgStr(buckets.b2)}</td>
-            <td>${bucketAvgStr(buckets.b3)}</td>
-            <td>${bucketAvgStr(buckets.other)}</td>
-            <td>${totalAvg}</td>
+            ${BUCKETS.map(k => `<td>${avgScore(totalB[k])}</td>`).join('')}
+            <td>${avgScore(data)}</td>
         </tr>`;
     }
 }
