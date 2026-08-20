@@ -58,51 +58,58 @@ async function replaceAuditData(rows, onProgress = null) {
         if (typeof onProgress === 'function') onProgress(phase, done, total);
     };
 
-    // Fires every 400-doc chunk concurrently (like batchWriteDocs) instead of
-    // waiting for each chunk's round-trip before starting the next one.
-    // Wall-clock time drops from "sum of every chunk's latency" to roughly
-    // "the slowest single chunk's latency".
-    async function commitChunksInParallel(phase, total, chunkCount, commitChunk) {
+    // Helper: commit an array of already-built batches concurrently and
+    // report progress as each one resolves.
+    async function commitBatchesConcurrently(phase, batches) {
+        const total = batches.reduce((s, b) => s + b.count, 0);
         report(phase, 0, total);
         let done = 0;
-        const promises = [];
-        for (let i = 0; i < chunkCount; i++) {
-            promises.push(
-                commitChunk(i).then((count) => {
-                    done += count;
-                    report(phase, done, total);
-                })
-            );
-        }
-        await Promise.all(promises);
+        await Promise.all(batches.map(({ batch, count }) =>
+            batch.commit().then(() => {
+                done += count;
+                report(phase, done, total);
+            })
+        ));
     }
 
-    const metaRef = doc(db, 'meta', 'auditData');
-    const metaSnap = await getDoc(metaRef);
-    const prevCount = metaSnap.exists() ? (metaSnap.data().count || 0) : 0;
-
-    if (prevCount > 0) {
-        const chunkCount = Math.ceil(prevCount / 400);
-        await commitChunksInParallel('Removing previous audit data', prevCount, chunkCount, (i) => {
-            const start = i * 400;
-            const end = Math.min(start + 400, prevCount);
-            const batch = writeBatch(db);
-            for (let j = start; j < end; j++) batch.delete(doc(db, 'auditData', 'row_' + j));
-            return batch.commit().then(() => end - start);
+    // DELETE — read every doc that actually exists rather than relying on a
+    // stored count.  A previous upload with more rows than the current one
+    // would leave "ghost" rows (row_10603 to row_N) that never got deleted
+    // under the old index-range approach, silently corrupting every aggregate.
+    report('Removing previous audit data', 0, 1);
+    const existingSnap = await getDocs(collection(db, 'auditData'));
+    if (existingSnap.size > 0) {
+        const deleteBatches = [];
+        let batch = writeBatch(db);
+        let batchCount = 0;
+        existingSnap.docs.forEach((d) => {
+            batch.delete(d.ref);
+            batchCount++;
+            if (batchCount === 400) {
+                deleteBatches.push({ batch, count: batchCount });
+                batch = writeBatch(db);
+                batchCount = 0;
+            }
         });
+        if (batchCount > 0) deleteBatches.push({ batch, count: batchCount });
+        await commitBatchesConcurrently('Removing previous audit data', deleteBatches);
     }
 
+    // WRITE new rows
     if (rows.length > 0) {
-        const chunkCount = Math.ceil(rows.length / 400);
-        await commitChunksInParallel('Uploading audit data', rows.length, chunkCount, (i) => {
-            const start = i * 400;
-            const chunk = rows.slice(start, start + 400);
-            const batch = writeBatch(db);
-            chunk.forEach((row, idx) => batch.set(doc(db, 'auditData', 'row_' + (start + idx)), row));
-            return batch.commit().then(() => chunk.length);
-        });
+        const writeBatches = [];
+        for (let i = 0; i < rows.length; i += 400) {
+            const chunk = rows.slice(i, i + 400);
+            const b = writeBatch(db);
+            chunk.forEach((row, idx) => b.set(doc(db, 'auditData', 'row_' + (i + idx)), row));
+            writeBatches.push({ batch: b, count: chunk.length });
+        }
+        await commitBatchesConcurrently('Uploading audit data', writeBatches);
     }
 
+    // Update meta — deletion no longer depends on this being accurate,
+    // but it is still shown in status messages so keep it up to date.
+    const metaRef = doc(db, 'meta', 'auditData');
     await setDoc(metaRef, { count: rows.length, updatedAt: Date.now() });
 }
 
