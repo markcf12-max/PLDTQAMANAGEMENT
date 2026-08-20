@@ -1001,10 +1001,60 @@ function populateDropdownOptions(rows) {
     });
 }
 
+// Valid LINE OF BUSINESS values that exist in the current raw file.
+// Any audit doc whose LOB is not in this set is a ghost row from an older
+// upload (e.g. "BOH - Account Management" before it was renamed to
+// "BOH - DIS Account Management") and should be purged automatically.
+const VALID_LOB_VALUES = new Set([
+    'Enterprise Hotline',
+    'Enterprise Sana All',
+    'Enterprise Email',
+    'Enterprise Social Media',
+    'BOH - DIS Account Management'
+]);
+
+async function purgeStaleAuditRows(allDocs) {
+    const stale = allDocs.filter(d => {
+        const lob = String(d.data()['LINE OF BUSINESS'] || d.data()['BRAND'] || '').trim();
+        return lob && !VALID_LOB_VALUES.has(lob);
+    });
+
+    if (!stale.length) return 0;
+
+    console.warn(`Purging ${stale.length} stale audit doc(s) with unrecognised LOB values.`);
+    const batches = [];
+    let batch = writeBatch(db);
+    let count = 0;
+    stale.forEach(d => {
+        batch.delete(d.ref);
+        count++;
+        if (count === 400) {
+            batches.push(batch);
+            batch = writeBatch(db);
+            count = 0;
+        }
+    });
+    if (count > 0) batches.push(batch);
+    await Promise.all(batches.map(b => b.commit()));
+    return stale.length;
+}
+
 async function loadAllAuditData() {
     try {
         const snap = await getDocs(collection(db, 'auditData'));
-        cachedAuditRows = snap.docs.map(d => d.data());
+
+        // Automatically remove ghost rows whose LOB no longer exists in
+        // the current dataset (left behind when a previous, larger upload
+        // used different LOB labels or had more rows than the current file).
+        const purged = await purgeStaleAuditRows(snap.docs);
+        if (purged > 0) {
+            console.warn(`Auto-purged ${purged} stale row(s). Reloading clean data.`);
+            const cleanSnap = await getDocs(collection(db, 'auditData'));
+            cachedAuditRows = cleanSnap.docs.map(d => d.data());
+        } else {
+            cachedAuditRows = snap.docs.map(d => d.data());
+        }
+
         console.log("Firestore auditData query succeeded. Row count:", cachedAuditRows.length);
         return cachedAuditRows;
     } catch (err) {
