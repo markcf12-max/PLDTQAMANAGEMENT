@@ -18,6 +18,7 @@ const TEAM_LEADER_INVITE_CODE = 'PLDT-TL-2026';
 const QUALITY_INVITE_CODE = 'PLDT-QA-2026'; 
 
 let lobChartInstance = null;
+let siteChartInstance = null;
 
 /* ==========================================================================
    FIRESTORE BATCH HELPERS (Concurrent Writes)
@@ -792,7 +793,8 @@ const NEEDED_FIELDS = [
     'TEAM LEADER', 'CLUSTER', 'WEEKENDING', 'MONTH', 'MISTREAT',
     'RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE',
     'EE number/ID number', 'OVERALL PASSRATE', 'CM', 'PASSRATE CM',
-    'RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS'
+    'RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS',
+    'Agent Work Setup2'
 ].concat(HIT_PARAMS.map(p => p.col), SCORE_SOURCE_FIELDS);
 
 function sourceCandidates(field) {
@@ -1216,6 +1218,96 @@ function renderGroupedBarChart(data) {
     });
 }
 
+// LOB label → chart series name mapping (matches the Excel dashboard legend)
+const LOB_TO_SERIES = {
+    'Enterprise Hotline':           'Hotline',
+    'Enterprise Sana All':          'Sana All',
+    'BOH - DIS Account Management': 'DIS-AM',
+    'Enterprise Email':             'Ecare'
+    // Enterprise Social Media is intentionally omitted — not in the source chart
+};
+const SERIES_ORDER  = ['Hotline', 'Sana All', 'DIS-AM', 'Ecare'];
+const SERIES_COLORS = {
+    Hotline:  '#D8B4F8',   // light purple
+    'Sana All': '#C084FC', // medium purple
+    'DIS-AM': '#7E22CE',   // dark purple
+    Ecare:    '#581C87'    // very dark purple / maroon
+};
+
+function renderSiteComparisonChart(data) {
+    const canvas = document.getElementById('siteChartCanvas');
+    if (!canvas) return;
+
+    // Group data by work setup (site), collapsing WFH/Onsite into WFH
+    const siteGroups = {};
+    data.forEach(r => {
+        let site = String(r['Agent Work Setup2'] || '').trim();
+        if (!site || site === 'WFH/Onsite') site = 'WFH'; // merge edge case
+        if (site === 'Unknown' || site === '') return;      // skip blanks
+
+        const lob = r['LINE OF BUSINESS'] || '';
+        const series = LOB_TO_SERIES[lob];
+        if (!series) return;                                 // skip unmapped LOBs
+
+        if (!siteGroups[site]) siteGroups[site] = {};
+        if (!siteGroups[site][series]) siteGroups[site][series] = [];
+
+        const score = Number(String(r['OVERALL SCORE'] || '').replace('%', ''));
+        if (!isNaN(score)) siteGroups[site][series].push(score);
+    });
+
+    const sites = Object.keys(siteGroups).sort(); // e.g. ['On-Site', 'WFH']
+
+    const getAvg = (arr) => arr && arr.length
+        ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length)
+        : null;
+
+    const datasets = SERIES_ORDER.map(series => ({
+        label: series,
+        backgroundColor: SERIES_COLORS[series],
+        data: sites.map(site => getAvg((siteGroups[site] || {})[series] || []))
+    }));
+
+    if (siteChartInstance) siteChartInstance.destroy();
+
+    siteChartInstance = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: { labels: sites, datasets },
+        plugins: [ChartDataLabels],
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            layout: { padding: { top: 24, bottom: 10 } },
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        pointStyle: 'rect',
+                        padding: 14,
+                        font: { size: 10, weight: 'bold' }
+                    }
+                },
+                datalabels: {
+                    anchor: 'end',
+                    align: 'top',
+                    offset: 2,
+                    formatter: (val) => val != null ? val + '%' : '',
+                    font: { size: 8, weight: 'bold' },
+                    color: '#333'
+                }
+            },
+            scales: {
+                y: { display: false, max: 115 },
+                x: {
+                    grid: { display: false },
+                    ticks: { font: { size: 10, weight: '600' }, color: '#333' }
+                }
+            }
+        }
+    });
+}
+
 function renderSummaryTables(data) {
     const passBody = document.getElementById('passRateSummaryBody');
     const auditBody = document.getElementById('auditCountSummaryBody');
@@ -1341,10 +1433,15 @@ function renderSupervisorDashboard(data) {
             lobChartInstance.destroy();
             lobChartInstance = null;
         }
+        if (siteChartInstance) {
+            siteChartInstance.destroy();
+            siteChartInstance = null;
+        }
         return;
     }
 
     renderGroupedBarChart(data);
+    renderSiteComparisonChart(data);
 
     const cmRows = data.filter(r => r['CM']);
     if (cmRows.length) {
