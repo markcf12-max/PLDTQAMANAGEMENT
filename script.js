@@ -391,7 +391,7 @@ async function enterApp() {
                 : `⚠️ 0 rows in auditData collection. Use the upload button to import data.`;
         }
         
-        populateDropdownOptions(rows);
+        populateDropdownOptions(rows, true); // true = auto-select latest weekending on login
         filterData();
     } else {
         await renderAgentView();
@@ -971,7 +971,7 @@ async function handleDataUpload(event) {
         if (dataStatus) dataStatus.innerHTML = `✅ Uploaded and fully synchronized ${processed.length} audits. Safe & Secure average: ${safeAverage}%. Team Leader matched: ${leaderRows}/${processed.length}. Roster status: ${activeRows} active, ${termedRows} termed, ${unmatched.length} not on roster. No manual re-sync is required.`;
         lastUnmatchedRows = unmatched;
         renderUnmatchedList(unmatched);
-        populateDropdownOptions(processed);
+        populateDropdownOptions(processed, true); // auto-select latest weekending after upload
         filterData();
     } catch (err) {
         console.error('Data Upload Failed:', err);
@@ -984,7 +984,7 @@ async function handleDataUpload(event) {
 /* ==========================================================================
    SUPERVISOR DASHBOARD & FILTERS
    ========================================================================== */
-function populateDropdownOptions(rows) {
+function populateDropdownOptions(rows, autoSelectLatestWeekending = false) {
     const map = {
         selectFormType: 'FORM TYPE',
         selectBrand: 'LINE OF BUSINESS',
@@ -999,8 +999,25 @@ function populateDropdownOptions(rows) {
         const current = sel.value;
         const uniques = [...new Set(rows.map(r => r[field] || r['BRAND']).filter(Boolean))].sort();
         sel.innerHTML = `<option value="ALL">(All)</option>` + uniques.map(v => `<option value="${v}">${v}</option>`).join('');
-        if (uniques.includes(current)) sel.value = current;
+        if (uniques.includes(current)) {
+            sel.value = current;
+        }
     });
+
+    // Auto-select the latest weekending on first load so the default view
+    // matches the Excel dashboard (which always shows the most recent week).
+    // Weekending codes are lexicographically sortable (WE0101 < WE0816),
+    // so the last item in the sorted list is always the most recent.
+    if (autoSelectLatestWeekending) {
+        const weEl = document.getElementById('selectWeekending');
+        if (weEl && weEl.options.length > 1) {
+            const options = Array.from(weEl.options).map(o => o.value).filter(v => v !== 'ALL');
+            if (options.length) {
+                const latest = options[options.length - 1]; // already sorted ascending
+                weEl.value = latest;
+            }
+        }
+    }
 }
 
 // Valid LINE OF BUSINESS values that exist in the current raw file.
@@ -1242,12 +1259,12 @@ function renderSiteComparisonChart(data) {
     const siteGroups = {};
     data.forEach(r => {
         let site = String(r['Agent Work Setup2'] || '').trim();
-        if (!site || site === 'WFH/Onsite') site = 'WFH'; // merge edge case
-        if (site === 'Unknown' || site === '') return;      // skip blanks
+        if (!site) site = 'Unknown';         // blank = no setup recorded
+        if (site === 'WFH/Onsite') site = 'On-Site'; // treat hybrid as on-site
 
         const lob = r['LINE OF BUSINESS'] || '';
         const series = LOB_TO_SERIES[lob];
-        if (!series) return;                                 // skip unmapped LOBs
+        if (!series) return;                 // skip unmapped LOBs (e.g. Social Media)
 
         if (!siteGroups[site]) siteGroups[site] = {};
         if (!siteGroups[site][series]) siteGroups[site][series] = [];
