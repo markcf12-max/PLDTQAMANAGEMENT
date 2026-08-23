@@ -366,6 +366,7 @@ body {
 /* DASHBOARD CANVAS */
 .dashboard-canvas {
     flex: 1;
+    min-width: 0; /* allow flex child to shrink below content size */
     padding: 12px;
     overflow-y: auto;
     display: flex;
@@ -373,7 +374,12 @@ body {
     gap: 12px;
 }
 
-.tables-grid { display: grid; grid-template-columns: 0.7fr 1.4fr 1.4fr 0.5fr; gap: 12px; }
+.tables-grid {
+    display: grid;
+    grid-template-columns: 0.7fr 1.4fr 1.4fr 0.5fr;
+    gap: 12px;
+    min-width: 0; /* prevent grid blowout */
+}
 
 .card-table {
     background-color: white;
@@ -384,6 +390,8 @@ body {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-width: 0; /* allow grid child to shrink */
+    overflow: hidden; /* hard stop — nothing bleeds out */
 }
 .card-table h3 {
     margin: 0;
@@ -401,14 +409,16 @@ body {
 
 /* Scrollable table wrapper with nav arrows */
 .table-scroll-wrap {
-    position: relative;
     display: flex;
     align-items: center;
     gap: 4px;
+    min-width: 0;
+    width: 100%;
 }
 .table-scroll-inner {
     overflow-x: auto;
     flex: 1;
+    min-width: 0; /* critical — lets flexbox shrink this below content size */
     scrollbar-width: thin;
     scrollbar-color: var(--card-border) transparent;
 }
@@ -434,19 +444,21 @@ body {
 }
 .scroll-btn:hover { background: var(--slicer-bg); }
 
-.excel-table { width: 100%; border-collapse: collapse; font-size: 10px; text-align: center; }
+/* Tables — do NOT set width:100% here; let content define natural width
+   so the scroll container actually activates instead of stretching */
+.excel-table { border-collapse: collapse; font-size: 10px; text-align: center; }
 .excel-table th {
     background-color: #fff0f2;
     color: #555;
     font-weight: 700;
-    padding: 5px 6px;
+    padding: 5px 8px;
     border-bottom: 2px solid var(--card-border);
     white-space: nowrap;
     font-size: 9.5px;
     text-transform: uppercase;
     letter-spacing: 0.3px;
 }
-.excel-table td { border-bottom: 1px solid #f5f5f5; padding: 5px 6px; color: #444; }
+.excel-table td { border-bottom: 1px solid #f5f5f5; padding: 5px 8px; color: #444; white-space: nowrap; }
 .excel-table tbody tr:hover td { background: #fff8f9; }
 .excel-table tr.total-row td {
     font-weight: 800;
@@ -459,11 +471,11 @@ body {
 .charts-row-1 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 12px; }
 
 /* Detailed LOB summary tables */
-.summary-detail-table { min-width: 100%; white-space: nowrap; }
+.summary-detail-table { white-space: nowrap; }
 .summary-detail-table th:first-child,
 .summary-detail-table td:first-child {
     text-align: left;
-    min-width: 160px;
+    min-width: 150px;
     font-weight: 600;
 }
 .summary-detail-table td:first-child { color: #555; font-weight: 500; }
