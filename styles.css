@@ -481,3 +481,200 @@ body {
 .summary-detail-table td:first-child { color: #555; font-weight: 500; }
 .summary-detail-table tbody tr:hover td { background: #fff8f9; }
 .summary-detail-table tr.total-row td:first-child { color: var(--pldt-red); }
+
+/* ============ CHART BOXES ============ */
+.chart-box {
+    background-color: white;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    /* Hard height cap — prevents canvas from stretching indefinitely */
+    max-height: 320px;
+    min-height: 0;
+    overflow: hidden;
+}
+.chart-box.tall { max-height: 420px; }
+
+.chart-title {
+    font-size: 11px;
+    font-weight: 800;
+    text-align: center;
+    margin-bottom: 8px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #333;
+    flex-shrink: 0;
+}
+
+/* Canvas wrapper — fixed height so Chart.js has something to respect */
+.chart-canvas-wrapper {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    height: 220px;   /* explicit height for maintainAspectRatio:false */
+    max-height: 260px;
+}
+
+.horizontal-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding-top: 5px;
+}
+.horizontal-bar-row { display: flex; align-items: center; font-size: 10px; }
+.horizontal-label {
+    width: 120px;
+    font-size: 9px;
+    color: #444;
+    text-align: right;
+    padding-right: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+}
+.horizontal-bar-container {
+    flex: 1;
+    background-color: #f0f0f0;
+    height: 28px;
+    border-radius: 3px;
+    position: relative;
+    min-width: 0;
+}
+.horizontal-bar-fill {
+    background-color: #1a1a1a;
+    height: 100%;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 8px;
+    color: white;
+    font-weight: bold;
+    font-size: 10px;
+    transition: width 0.4s ease;
+    min-width: 28px;
+}
+
+.hitlist-table td.reason-cell { text-align: left; font-size: 9.5px; }
+.tag {
+    display: inline-block;
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin: 1px 3px 1px 0;
+    color: white;
+    white-space: nowrap;
+}
+.tag.Reliable { background: #f0c4c9; color: #7a0f1e; }
+.tag.Personable { background: #e6e6e6; color: #2b2b2b; }
+.tag.Fast { background: #7a0f1e; }
+.tag.Safe.Secure, .tag.SafeSecure { background: #1a1a1a; }
+.tag.Mistreat { background: var(--danger); }
+
+.empty-note { font-size: 11px; color: #999; text-align: center; padding: 20px; }
+
+/* ============ AGENT VIEW ============ */
+#agentView { flex: 1; overflow-y: auto; padding: 20px 24px; display: none; flex-direction: column; gap: 16px; }
+
+.agent-welcome { background: white; border: 1px solid var(--card-border); border-radius: 6px; padding: 16px 20px; }
+.agent-welcome h2 { margin: 0 0 4px 0; color: var(--pldt-red); font-size: 20px; }
+.agent-welcome p { margin: 0; font-size: 12px; color: #777; }
+
+.scorecard-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+.score-tile {
+    background: white;
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 16px 10px;
+    text-align: center;
+}
+.score-tile .num { font-size: 26px; font-weight: 900; color: var(--pldt-red); }
+.score-tile .lbl { font-size: 10px; color: #777; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.4px; }
+
+.agent-section { background: white; border: 1px solid var(--card-border); border-radius: 6px; padding: 16px 20px; }
+.agent-section h3 { margin: 0 0 12px 0; font-size: 13px; color: #333; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+
+.month-group { border: 1px solid #eee; border-radius: 6px; margin-bottom: 10px; overflow: hidden; }
+.month-group[open] { border-color: var(--slicer-border); }
+.month-summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 10px 14px;
+    background: #f7f7f5;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    font-weight: bold;
+    color: var(--pldt-red);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+.month-summary::-webkit-details-marker { display: none; }
+.month-summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 8px;
+    transition: transform 0.15s ease;
+    font-size: 10px;
+}
+.month-group[open] .month-summary::before { transform: rotate(90deg); }
+.month-count { font-weight: normal; color: #888; text-transform: none; font-size: 10.5px; }
+.month-avg { font-weight: normal; color: #888; text-transform: none; font-size: 10.5px; }
+.month-body { padding: 12px 14px; }
+.month-body .audit-row:last-child { margin-bottom: 0; }
+
+.audit-row {
+    border: 1px solid #eee;
+    border-radius: 5px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+}
+.audit-row .audit-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 6px;
+}
+.audit-row .audit-head .score-pill {
+    padding: 2px 9px;
+    border-radius: 12px;
+    font-size: 11px;
+    color: white;
+}
+.pass-pill { background: var(--pldt-red); }
+.fail-pill { background: var(--danger); }
+.audit-meta { font-size: 10px; color: #888; margin-bottom: 6px; }
+.no-issues-note { font-size: 10.5px; color: var(--pldt-red-mid); font-style: italic; }
+.audit-comments {
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: #faf7f4;
+    border-left: 3px solid var(--card-border);
+    border-radius: 3px;
+}
+.audit-comments p { margin: 0 0 4px 0; font-size: 10.5px; color: #666; line-height: 1.5; }
+.audit-comments p:last-child { margin-bottom: 0; }
+
+.empty-agent-data { text-align: center; padding: 40px 20px; color: #999; font-size: 12px; }
+
+footer.disclaimer {
+    font-size: 9.5px;
+    color: #999;
+    text-align: center;
+    padding: 6px;
+    background: #fff;
+    border-top: 1px solid #eee;
+}
