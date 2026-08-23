@@ -751,6 +751,7 @@ async function resyncAgentEmails() {
 
 const SOURCE_FIELD_ALIASES = {
     'Start time': ['Start time', 'START TIME'],
+    'Agent Work Setup2': ['Agent Work Setup2', 'Agent Work Setup', 'Work Setup', 'Work Setup2', 'WFH/Onsite'],
     'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?': [
         'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?',
         'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL? - HIDDEN',
