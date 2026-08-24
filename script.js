@@ -1621,6 +1621,115 @@ async function renderAgentView() {
 }
 
 /* ==========================================================================
+   FLOATING CARD SYSTEM
+   ========================================================================== */
+const floatingCards = {}; // id → { overlay, placeholder, originalParent, nextSibling }
+
+function floatCard(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card || floatingCards[cardId]) return; // already floating
+
+    // Remember original DOM position so we can dock it back
+    const originalParent = card.parentNode;
+    const nextSibling = card.nextSibling;
+    const title = card.querySelector('h3').textContent.trim().replace(/[⧉]/g, '').trim();
+    const rect = card.getBoundingClientRect();
+
+    // Create placeholder in the grid
+    const placeholder = document.createElement('div');
+    placeholder.className = 'card-table-placeholder';
+    placeholder.title = 'Click to dock back';
+    placeholder.textContent = '↩ ' + title;
+    placeholder.onclick = () => dockCard(cardId);
+    originalParent.insertBefore(placeholder, card);
+
+    // Build floating overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'float-overlay';
+    overlay.style.left = Math.min(rect.left, window.innerWidth - 420) + 'px';
+    overlay.style.top = Math.max(rect.top, 60) + 'px';
+    overlay.style.width = Math.max(rect.width, 340) + 'px';
+
+    overlay.innerHTML = `
+        <div class="float-overlay-header" id="fh-${cardId}">
+            <span class="float-overlay-title">${escapeHtml(title)}</span>
+            <div class="float-overlay-actions">
+                <button class="float-dock-btn" onclick="dockCard('${cardId}')">↩ Dock</button>
+                <button class="float-close-btn" onclick="dockCard('${cardId}')" title="Close">✕</button>
+            </div>
+        </div>
+        <div class="float-overlay-body" id="fb-${cardId}"></div>`;
+
+    document.body.appendChild(overlay);
+
+    // Move card content (without the h3) into the overlay body
+    const body = overlay.querySelector(`#fb-${cardId}`);
+    Array.from(card.children).forEach(child => {
+        if (child.tagName !== 'H3') body.appendChild(child);
+    });
+
+    // Hide original card
+    card.style.display = 'none';
+    originalParent.removeChild(card);
+
+    floatingCards[cardId] = { overlay, placeholder, originalParent, nextSibling, card };
+
+    // Drag behaviour
+    makeDraggable(overlay, overlay.querySelector(`#fh-${cardId}`));
+}
+
+function dockCard(cardId) {
+    const entry = floatingCards[cardId];
+    if (!entry) return;
+    const { overlay, placeholder, originalParent, nextSibling, card } = entry;
+
+    // Move content back into the card
+    const body = overlay.querySelector(`#fb-${cardId}`);
+    Array.from(body.children).forEach(child => card.appendChild(child));
+
+    // Restore card in the grid
+    card.style.display = '';
+    if (nextSibling && nextSibling.parentNode === originalParent) {
+        originalParent.insertBefore(card, nextSibling);
+    } else {
+        originalParent.appendChild(card);
+    }
+
+    // Remove overlay and placeholder
+    overlay.remove();
+    placeholder.remove();
+    delete floatingCards[cardId];
+}
+
+function makeDraggable(el, handle) {
+    let startX, startY, startLeft, startTop;
+
+    handle.addEventListener('mousedown', e => {
+        if (e.target.tagName === 'BUTTON') return; // don't drag on button clicks
+        e.preventDefault();
+        startX = e.clientX;
+        startY = e.clientY;
+        startLeft = parseInt(el.style.left) || 0;
+        startTop = parseInt(el.style.top) || 0;
+
+        const onMove = e => {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            const newLeft = Math.max(0, Math.min(window.innerWidth - 80, startLeft + dx));
+            const newTop = Math.max(0, Math.min(window.innerHeight - 40, startTop + dy));
+            el.style.left = newLeft + 'px';
+            el.style.top = newTop + 'px';
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+}
+
+/* ==========================================================================
    GLOBAL EXPORTS & INITIALIZATION
    ========================================================================== */
 window.switchAuthTab = switchAuthTab;
@@ -1635,5 +1744,7 @@ window.toggleUploadPanel = toggleUploadPanel;
 window.handleRosterUpload = handleRosterUpload;
 window.handleDataUpload = handleDataUpload;
 window.resyncAgentEmails = resyncAgentEmails;
+window.floatCard = floatCard;
+window.dockCard = dockCard;
 
 setSignupRole('agent');
