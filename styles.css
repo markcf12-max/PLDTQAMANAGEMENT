@@ -678,3 +678,110 @@ footer.disclaimer {
     background: #fff;
     border-top: 1px solid #eee;
 }
+
+/* ============ FLOATING CARD ============ */
+.float-btn {
+    float: right;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--pldt-red-mid);
+    opacity: 0.5;
+    padding: 0 2px;
+    line-height: 1;
+    transition: opacity 0.15s;
+    margin-top: -1px;
+}
+.float-btn:hover { opacity: 1; }
+
+.float-overlay {
+    position: fixed;
+    z-index: 1000;
+    background: white;
+    border: 1.5px solid var(--card-border);
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+    min-width: 320px;
+    max-width: 90vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    resize: both;
+}
+
+.float-overlay-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #fbeaec;
+    border-bottom: 1px solid var(--card-border);
+    cursor: grab;
+    user-select: none;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.float-overlay-header:active { cursor: grabbing; }
+
+.float-overlay-title {
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--pldt-red);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    flex: 1;
+}
+
+.float-overlay-actions { display: flex; gap: 6px; align-items: center; }
+
+.float-close-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: #999;
+    line-height: 1;
+    padding: 0 2px;
+    transition: color 0.15s;
+}
+.float-close-btn:hover { color: var(--danger); }
+
+.float-dock-btn {
+    background: none;
+    border: 1px solid var(--card-border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 10px;
+    color: var(--pldt-red-mid);
+    padding: 2px 6px;
+    font-weight: 700;
+    transition: background 0.15s;
+}
+.float-dock-btn:hover { background: var(--slicer-bg); }
+
+.float-overlay-body {
+    flex: 1;
+    overflow: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Placeholder shown in the grid while the card is floating */
+.card-table-placeholder {
+    border: 2px dashed var(--card-border);
+    border-radius: 8px;
+    background: #fdfafa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: #ccc;
+    min-height: 80px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+.card-table-placeholder:hover { border-color: var(--pldt-red-mid); color: var(--pldt-red-mid); }
