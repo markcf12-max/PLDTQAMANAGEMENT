@@ -194,8 +194,8 @@
 
         <div class="dashboard-canvas" id="supervisorView" style="display:none;">
             <div class="tables-grid">
-                <div class="card-table">
-                    <h3>Pass Rate %</h3>
+                <div class="card-table" id="card-passrate">
+                    <h3>Pass Rate % <button class="float-btn" title="Float panel" onclick="floatCard('card-passrate')">⧉</button></h3>
                     <div class="table-scroll-wrap">
                         <div class="scroll-btn" onclick="this.nextElementSibling.scrollLeft-=120">&#8249;</div>
                         <div class="table-scroll-inner">
@@ -207,8 +207,8 @@
                         <div class="scroll-btn" onclick="this.previousElementSibling.scrollLeft+=120">&#8250;</div>
                     </div>
                 </div>
-                <div class="card-table">
-                    <h3>Number of Audits (by Tenure)</h3>
+                <div class="card-table" id="card-auditcount">
+                    <h3>Number of Audits (by Tenure) <button class="float-btn" title="Float panel" onclick="floatCard('card-auditcount')">⧉</button></h3>
                     <div class="table-scroll-wrap">
                         <div class="scroll-btn" onclick="this.nextElementSibling.scrollLeft-=120">&#8249;</div>
                         <div class="table-scroll-inner">
@@ -220,8 +220,8 @@
                         <div class="scroll-btn" onclick="this.previousElementSibling.scrollLeft+=120">&#8250;</div>
                     </div>
                 </div>
-                <div class="card-table">
-                    <h3>Average OA Scores (by Tenure)</h3>
+                <div class="card-table" id="card-avgscore">
+                    <h3>Average OA Scores (by Tenure) <button class="float-btn" title="Float panel" onclick="floatCard('card-avgscore')">⧉</button></h3>
                     <div class="table-scroll-wrap">
                         <div class="scroll-btn" onclick="this.nextElementSibling.scrollLeft-=120">&#8249;</div>
                         <div class="table-scroll-inner">
@@ -233,8 +233,8 @@
                         <div class="scroll-btn" onclick="this.previousElementSibling.scrollLeft+=120">&#8250;</div>
                     </div>
                 </div>
-                <div class="card-table">
-                    <h3>CM Distribution</h3>
+                <div class="card-table" id="card-cm">
+                    <h3>CM Distribution <button class="float-btn" title="Float panel" onclick="floatCard('card-cm')">⧉</button></h3>
                     <table class="excel-table">
                         <thead><tr><th>Superstar</th><th>Underperformer</th></tr></thead>
                         <tbody>
