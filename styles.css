@@ -205,20 +205,11 @@ body {
 .field-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
 /* ============ APP BODY ============ */
-.app-body { display: flex; flex: 1; overflow: hidden; }
+.app-body { display: flex; flex: 1; overflow: hidden; min-width: 0; }
 #appScreen { display: none; flex: 1; flex-direction: column; }
 
 /* SIDEBAR / SLICERS */
-.sidebar {
-    width: 250px;
-    background-color: var(--bg-beige);
-    border-right: 2px solid #d9c5b2;
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    overflow-y: auto;
-}
+/* .sidebar base styles now in the COLLAPSIBLE SIDEBAR section below */
 
 .sidebar-top-row { display: flex; justify-content: flex-start; }
 .upload-icon-btn {
@@ -246,6 +237,9 @@ body {
     border-radius: 10px;
     padding: 10px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 .filters-panel {
@@ -785,3 +779,60 @@ footer.disclaimer {
     transition: border-color 0.15s, color 0.15s;
 }
 .card-table-placeholder:hover { border-color: var(--pldt-red-mid); color: var(--pldt-red-mid); }
+
+/* ============ COLLAPSIBLE SIDEBAR ============ */
+/* ---- Sidebar shell ---- */
+.sidebar {
+    position: relative;
+    flex-shrink: 0;
+    width: 260px;
+    min-width: 0;
+    overflow: hidden;           /* clips sidebar-inner when collapsing */
+    background-color: var(--bg-beige);
+    border-right: 2px solid #d9c5b2;
+    transition: width 0.25s ease;
+}
+.sidebar.collapsed { width: 20px; }
+
+/* ---- Toggle tab — always visible ---- */
+.sidebar-toggle {
+    position: absolute;
+    right: -16px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 30;
+    width: 16px;
+    height: 52px;
+    background: var(--pldt-red);
+    border: none;
+    border-radius: 0 6px 6px 0;
+    color: white;
+    font-size: 9px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 2px 2px 6px rgba(0,0,0,0.18);
+    transition: background 0.15s;
+    padding: 0;
+}
+.sidebar-toggle:hover { background: var(--pldt-red-mid); }
+
+/* ---- Scrollable content area ---- */
+.sidebar-inner {
+    width: 258px;              /* matches sidebar width minus border */
+    height: 100%;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    box-sizing: border-box;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+.sidebar.collapsed .sidebar-inner {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
