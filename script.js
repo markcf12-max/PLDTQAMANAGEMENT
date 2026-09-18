@@ -413,7 +413,14 @@ async function enterApp() {
 
     if (canViewDashboard) {
         if (canUpload) await refreshRosterStatus();
-        const rows = await loadAllAuditData();
+
+        // Only read from Firestore if the cache is empty (first load).
+        // Subsequent filter changes and re-entries use the in-memory cache,
+        // saving thousands of Firestore reads per session.
+        if (!cachedAuditRows.length) {
+            await loadAllAuditData();
+        }
+        const rows = cachedAuditRows;
         console.log(`Loaded ${rows.length} rows for Supervisor view.`);
         
         const dataStatus = document.getElementById('dataStatus');
@@ -777,7 +784,21 @@ async function resyncAgentEmails() {
         const workers = [];
         for (let i = 0; i < Math.min(MAX_CONCURRENT, batches.length); i++) workers.push(runNext());
         await Promise.all(workers);
-        await loadAllAuditData();
+
+        // Update the in-memory cache directly — the data is already in memory
+        // from the dataSnap we read above, updated with the new email/TL/status.
+        // This avoids a second full Firestore read of 10k+ docs.
+        cachedAuditRows = dataSnap.docs.map(d => {
+            const row = d.data();
+            const id = normalizeEmployeeId(row['EE number/ID number'] || row['WIN ID'] || row['ID']);
+            const match = (id && byId[id]) || byName[normalizeName(row['AGENT/OFFICER NAME'])] || null;
+            return {
+                ...row,
+                agentEmailLower: match ? (match.email || '') : '',
+                'TEAM LEADER': String(row['TEAM LEADER'] || (match ? match.teamLeader : '') || '').trim(),
+                'AGENT STATUS': match ? (match.status || 'UNKNOWN') : 'UNKNOWN'
+            };
+        });
         populateDropdownOptions(cachedAuditRows);
         filterData();
         lastUnmatchedRows = unmatchedRows;
