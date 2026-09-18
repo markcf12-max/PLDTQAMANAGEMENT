@@ -105,89 +105,96 @@
 
         <!-- ===== SUPERVISOR VIEW ===== -->
         <div class="sidebar" id="supervisorSidebar" style="display:none;">
-            <div class="filters-panel">
-                <div class="filters-panel-head">
-                    <span>🔎 Filters</span>
-                    <button type="button" class="filters-reset" onclick="resetFilters()">Reset</button>
+            <!-- Toggle tab — always visible even when sidebar is collapsed -->
+            <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()" title="Show / hide filters">
+                <span id="sidebarToggleIcon">◀</span>
+            </button>
+
+            <div class="sidebar-inner" id="sidebarInner">
+                <div class="filters-panel">
+                    <div class="filters-panel-head">
+                        <span>🔎 Filters</span>
+                        <button type="button" class="filters-reset" onclick="resetFilters()">Reset</button>
+                    </div>
+
+                    <div class="filter-field">
+                        <label>Form Type</label>
+                        <div class="select-wrap">
+                            <select id="selectFormType" onchange="filterData()"><option value="ALL">(All Form Types)</option></select>
+                        </div>
+                    </div>
+                    <div class="filter-field">
+                        <label>LOB</label>
+                        <div class="select-wrap">
+                            <select id="selectBrand" onchange="filterData()"><option value="ALL">(All LOB)</option></select>
+                        </div>
+                    </div>
+                    <div class="filter-field">
+                        <label>Month</label>
+                        <div class="select-wrap">
+                            <select id="selectMonth" onchange="filterData()"><option value="ALL">(All Months)</option></select>
+                        </div>
+                    </div>
+                    <div class="filter-field">
+                        <label>Weekending</label>
+                        <div class="select-wrap">
+                            <select id="selectWeekending" onchange="filterData()"><option value="ALL">(All Weekending)</option></select>
+                        </div>
+                    </div>
+                    <div class="filter-field">
+                        <label>Agent Tenure</label>
+                        <div class="select-wrap">
+                            <select id="selectTenure" onchange="filterData()"><option value="ALL">(All Tenures)</option></select>
+                        </div>
+                    </div>
+                    <div class="filter-field">
+                        <label>Team Leader</label>
+                        <div class="select-wrap">
+                            <select id="selectTeamLeader" onchange="filterData()"><option value="ALL">(All Team Leaders)</option></select>
+                        </div>
+                    </div>
+                    <div class="filter-field">
+                        <label>Employment Status</label>
+                        <div class="select-wrap">
+                            <select id="selectAgentStatus" onchange="filterData()">
+                                <option value="ALL">(All)</option>
+                                <option value="ACTIVE">Active</option>
+                                <option value="TERMED">Termed</option>
+                                <option value="UNKNOWN">Not on Roster</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="filter-field">
-                    <label>Form Type</label>
-                    <div class="select-wrap">
-                        <select id="selectFormType" onchange="filterData()"><option value="ALL">(All Form Types)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>LOB</label>
-                    <div class="select-wrap">
-                        <select id="selectBrand" onchange="filterData()"><option value="ALL">(All LOB)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Month</label>
-                    <div class="select-wrap">
-                        <select id="selectMonth" onchange="filterData()"><option value="ALL">(All Months)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Weekending</label>
-                    <div class="select-wrap">
-                        <select id="selectWeekending" onchange="filterData()"><option value="ALL">(All Weekending)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Agent Tenure</label>
-                    <div class="select-wrap">
-                        <select id="selectTenure" onchange="filterData()"><option value="ALL">(All Tenures)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Team Leader</label>
-                    <div class="select-wrap">
-                        <select id="selectTeamLeader" onchange="filterData()"><option value="ALL">(All Team Leaders)</option></select>
-                    </div>
-                </div>
-                <div class="filter-field">
-                    <label>Employment Status</label>
-                    <div class="select-wrap">
-                        <select id="selectAgentStatus" onchange="filterData()">
-                            <option value="ALL">(All)</option>
-                            <option value="ACTIVE">Active</option>
-                            <option value="TERMED">Termed</option>
-                            <option value="UNKNOWN">Not on Roster</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="sidebar-top-row">
-                <button class="upload-icon-btn" id="uploadIconBtn" onclick="toggleUploadPanel()" title="Upload / manage data">📁<span class="upload-icon-label">Data</span></button>
-            </div>
-
-            <div class="upload-popover" id="uploadPopover" style="display:none;">
-                <div class="upload-section">
-                    <h4>1. Agent Roster</h4>
-                    <div class="upload-btn-wrapper">
-                        <button class="btn-upload">📇 Upload Roster (Active + Termed)</button>
-                        <input type="file" id="rosterFileInput" accept=".csv,.xlsx,.xls" onchange="handleRosterUpload(event)">
-                    </div>
-                    <div class="file-status" id="rosterStatus">No roster loaded yet.</div>
-                    <div class="file-status">Reads both the Active roster sheet and the Termed sheet (if present), so historical audits for agents who've since left still match correctly.</div>
+                <div class="sidebar-top-row">
+                    <button class="upload-icon-btn" id="uploadIconBtn" onclick="toggleUploadPanel()" title="Upload / manage data">📁<span class="upload-icon-label">Data</span></button>
                 </div>
 
-                <div class="upload-section">
-                    <h4>2. Raw Audit Data</h4>
-                    <div class="upload-btn-wrapper">
-                        <button class="btn-upload">📁 Upload Raw Data</button>
-                        <input type="file" id="dataFileInput" accept=".csv,.xlsx,.xls" onchange="handleDataUpload(event)">
+                <div class="upload-popover" id="uploadPopover" style="display:none;">
+                    <div class="upload-section">
+                        <h4>1. Agent Roster</h4>
+                        <div class="upload-btn-wrapper">
+                            <button class="btn-upload">📇 Upload Roster (Active + Termed)</button>
+                            <input type="file" id="rosterFileInput" accept=".csv,.xlsx,.xls" onchange="handleRosterUpload(event)">
+                        </div>
+                        <div class="file-status" id="rosterStatus">No roster loaded yet.</div>
+                        <div class="file-status">Reads both the Active roster sheet and the Termed sheet (if present), so historical audits for agents who've since left still match correctly.</div>
                     </div>
-                    <div class="file-status" id="dataStatus">No audit data loaded yet.</div>
-                    <div class="file-status" id="resyncStatus">Agent email and Team Leader matching run automatically whenever a roster or raw audit file is uploaded.</div>
-                </div>
 
-                <div class="upload-section" id="unmatchedBox" style="display:none; text-align:left;">
-                    <h4>⚠️ Not Found on Roster</h4>
-                    <div id="unmatchedList" style="max-height:160px; overflow-y:auto;"></div>
+                    <div class="upload-section">
+                        <h4>2. Raw Audit Data</h4>
+                        <div class="upload-btn-wrapper">
+                            <button class="btn-upload">📁 Upload Raw Data</button>
+                            <input type="file" id="dataFileInput" accept=".csv,.xlsx,.xls" onchange="handleDataUpload(event)">
+                        </div>
+                        <div class="file-status" id="dataStatus">No audit data loaded yet.</div>
+                        <div class="file-status" id="resyncStatus">Agent email and Team Leader matching run automatically whenever a roster or raw audit file is uploaded.</div>
+                    </div>
+
+                    <div class="upload-section" id="unmatchedBox" style="display:none; text-align:left;">
+                        <h4>⚠️ Not Found on Roster</h4>
+                        <div id="unmatchedList" style="max-height:160px; overflow-y:auto;"></div>
+                    </div>
                 </div>
             </div>
         </div>
