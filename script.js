@@ -24,34 +24,52 @@ let siteChartInstance = null;
    FIRESTORE BATCH HELPERS (Concurrent Writes)
    ========================================================================== */
 async function batchWriteDocs(collectionName, docs, idFn) {
+    const MAX_CONCURRENT = 4;
     const chunks = [];
     for (let i = 0; i < docs.length; i += 400) chunks.push(docs.slice(i, i + 400));
-    
-    const promises = chunks.map(chunk => {
+    let idx = 0;
+
+    async function runNext() {
+        if (idx >= chunks.length) return;
+        const chunk = chunks[idx++];
         const batch = writeBatch(db);
         chunk.forEach(d => {
             const ref = idFn ? doc(db, collectionName, idFn(d)) : doc(collection(db, collectionName));
             batch.set(ref, d);
         });
-        return batch.commit();
-    });
+        await batch.commit();
+        await runNext();
+    }
 
-    await Promise.all(promises);
+    const workers = [];
+    for (let i = 0; i < Math.min(MAX_CONCURRENT, chunks.length); i++) {
+        workers.push(runNext());
+    }
+    await Promise.all(workers);
 }
 
 async function clearCollection(collectionName) {
     const snap = await getDocs(collection(db, collectionName));
     const ids = snap.docs.map(d => d.id);
-    const promises = [];
+    const MAX_CONCURRENT = 4;
+    let idx = 0;
 
-    for (let i = 0; i < ids.length; i += 400) {
-        const chunk = ids.slice(i, i + 400);
+    async function runNext() {
+        if (idx >= ids.length) return;
+        const start = idx;
+        idx = Math.min(idx + 400, ids.length);
+        const chunk = ids.slice(start, idx);
         const batch = writeBatch(db);
         chunk.forEach(id => batch.delete(doc(db, collectionName, id)));
-        promises.push(batch.commit());
+        await batch.commit();
+        await runNext();
     }
 
-    await Promise.all(promises);
+    const workers = [];
+    for (let i = 0; i < Math.min(MAX_CONCURRENT, Math.ceil(ids.length / 400)); i++) {
+        workers.push(runNext());
+    }
+    await Promise.all(workers);
 }
 
 async function replaceAuditData(rows, onProgress = null) {
@@ -59,24 +77,39 @@ async function replaceAuditData(rows, onProgress = null) {
         if (typeof onProgress === 'function') onProgress(phase, done, total);
     };
 
-    // Helper: commit an array of already-built batches concurrently and
-    // report progress as each one resolves.
-    async function commitBatchesConcurrently(phase, batches) {
+    // Commit batches in a sliding window of MAX_CONCURRENT at a time.
+    // Firing all batches at once (Promise.all over hundreds of batches) floods
+    // Firestore's write stream and triggers "resource-exhausted" / backoff errors.
+    // A window of 4 keeps throughput high while staying well under the limit.
+    const MAX_CONCURRENT = 4;
+
+    async function commitBatchesWindowed(phase, batches) {
         const total = batches.reduce((s, b) => s + b.count, 0);
         report(phase, 0, total);
         let done = 0;
-        await Promise.all(batches.map(({ batch, count }) =>
-            batch.commit().then(() => {
-                done += count;
-                report(phase, done, total);
-            })
-        ));
+        let idx = 0;
+
+        async function runNext() {
+            if (idx >= batches.length) return;
+            const { batch, count } = batches[idx++];
+            await batch.commit();
+            done += count;
+            report(phase, done, total);
+            await runNext();
+        }
+
+        // Start up to MAX_CONCURRENT workers
+        const workers = [];
+        for (let i = 0; i < Math.min(MAX_CONCURRENT, batches.length); i++) {
+            workers.push(runNext());
+        }
+        await Promise.all(workers);
     }
 
     // DELETE — read every doc that actually exists rather than relying on a
-    // stored count.  A previous upload with more rows than the current one
-    // would leave "ghost" rows (row_10603 to row_N) that never got deleted
-    // under the old index-range approach, silently corrupting every aggregate.
+    // stored count. A previous upload with more rows than the current one
+    // would leave "ghost" rows that never got deleted under the old
+    // index-range approach, silently corrupting every aggregate.
     report('Removing previous audit data', 0, 1);
     const existingSnap = await getDocs(collection(db, 'auditData'));
     if (existingSnap.size > 0) {
@@ -93,7 +126,7 @@ async function replaceAuditData(rows, onProgress = null) {
             }
         });
         if (batchCount > 0) deleteBatches.push({ batch, count: batchCount });
-        await commitBatchesConcurrently('Removing previous audit data', deleteBatches);
+        await commitBatchesWindowed('Removing previous audit data', deleteBatches);
     }
 
     // WRITE new rows
@@ -105,11 +138,10 @@ async function replaceAuditData(rows, onProgress = null) {
             chunk.forEach((row, idx) => b.set(doc(db, 'auditData', 'row_' + (i + idx)), row));
             writeBatches.push({ batch: b, count: chunk.length });
         }
-        await commitBatchesConcurrently('Uploading audit data', writeBatches);
+        await commitBatchesWindowed('Uploading audit data', writeBatches);
     }
 
-    // Update meta — deletion no longer depends on this being accurate,
-    // but it is still shown in status messages so keep it up to date.
+    // Update meta count
     const metaRef = doc(db, 'meta', 'auditData');
     await setDoc(metaRef, { count: rows.length, updatedAt: Date.now() });
 }
@@ -714,7 +746,9 @@ async function resyncAgentEmails() {
         const docs = dataSnap.docs;
         let matched = 0, unmatchedCount = 0, leaders = 0;
         const unmatchedRows = [];
-        const promises = [];
+
+        // Build all batches first (pure CPU work), then commit with rate limiting
+        const batches = [];
         for (let i = 0; i < docs.length; i += 400) {
             const chunk = docs.slice(i, i + 400);
             const batch = writeBatch(db);
@@ -725,18 +759,24 @@ async function resyncAgentEmails() {
                 const email = match ? (match.email || '') : '';
                 const agentStatus = match ? (match.status || 'UNKNOWN') : 'UNKNOWN';
                 const teamLeader = String(row['TEAM LEADER'] || (match ? match.teamLeader : '') || '').trim();
-                if (match) {
-                    matched++;
-                } else {
-                    unmatchedCount++;
-                    unmatchedRows.push({ name: row['AGENT/OFFICER NAME'], id, source: 'resync' });
-                }
+                if (match) { matched++; } else { unmatchedCount++; unmatchedRows.push({ name: row['AGENT/OFFICER NAME'], id, source: 'resync' }); }
                 if (teamLeader) leaders++;
                 batch.update(doc(db, 'auditData', d.id), { agentEmailLower: email, 'TEAM LEADER': teamLeader, 'AGENT STATUS': agentStatus });
             });
-            promises.push(batch.commit());
+            batches.push(batch);
         }
-        await Promise.all(promises);
+
+        // Windowed commit — max 4 in-flight at a time to avoid write stream exhaustion
+        const MAX_CONCURRENT = 4;
+        let bIdx = 0;
+        async function runNext() {
+            if (bIdx >= batches.length) return;
+            await batches[bIdx++].commit();
+            await runNext();
+        }
+        const workers = [];
+        for (let i = 0; i < Math.min(MAX_CONCURRENT, batches.length); i++) workers.push(runNext());
+        await Promise.all(workers);
         await loadAllAuditData();
         populateDropdownOptions(cachedAuditRows);
         filterData();
@@ -1025,56 +1065,10 @@ function populateDropdownOptions(rows, autoSelectLatestWeekending = false) {
 // Any audit doc whose LOB is not in this set is a ghost row from an older
 // upload (e.g. "BOH - Account Management" before it was renamed to
 // "BOH - DIS Account Management") and should be purged automatically.
-const VALID_LOB_VALUES = new Set([
-    'Enterprise Hotline',
-    'Enterprise Sana All',
-    'Enterprise Email',
-    'Enterprise Social Media',
-    'BOH - DIS Account Management'
-]);
-
-async function purgeStaleAuditRows(allDocs) {
-    const stale = allDocs.filter(d => {
-        const lob = String(d.data()['LINE OF BUSINESS'] || d.data()['BRAND'] || '').trim();
-        return lob && !VALID_LOB_VALUES.has(lob);
-    });
-
-    if (!stale.length) return 0;
-
-    console.warn(`Purging ${stale.length} stale audit doc(s) with unrecognised LOB values.`);
-    const batches = [];
-    let batch = writeBatch(db);
-    let count = 0;
-    stale.forEach(d => {
-        batch.delete(d.ref);
-        count++;
-        if (count === 400) {
-            batches.push(batch);
-            batch = writeBatch(db);
-            count = 0;
-        }
-    });
-    if (count > 0) batches.push(batch);
-    await Promise.all(batches.map(b => b.commit()));
-    return stale.length;
-}
-
 async function loadAllAuditData() {
     try {
         const snap = await getDocs(collection(db, 'auditData'));
-
-        // Automatically remove ghost rows whose LOB no longer exists in
-        // the current dataset (left behind when a previous, larger upload
-        // used different LOB labels or had more rows than the current file).
-        const purged = await purgeStaleAuditRows(snap.docs);
-        if (purged > 0) {
-            console.warn(`Auto-purged ${purged} stale row(s). Reloading clean data.`);
-            const cleanSnap = await getDocs(collection(db, 'auditData'));
-            cachedAuditRows = cleanSnap.docs.map(d => d.data());
-        } else {
-            cachedAuditRows = snap.docs.map(d => d.data());
-        }
-
+        cachedAuditRows = snap.docs.map(d => d.data());
         console.log("Firestore auditData query succeeded. Row count:", cachedAuditRows.length);
         return cachedAuditRows;
     } catch (err) {
@@ -1621,6 +1615,17 @@ async function renderAgentView() {
 }
 
 /* ==========================================================================
+   SIDEBAR TOGGLE
+   ========================================================================== */
+function toggleSidebar() {
+    const sidebar = document.getElementById('supervisorSidebar');
+    const icon = document.getElementById('sidebarToggleIcon');
+    if (!sidebar) return;
+    const isCollapsed = sidebar.classList.toggle('collapsed');
+    if (icon) icon.textContent = isCollapsed ? '▶' : '◀';
+}
+
+/* ==========================================================================
    FLOATING CARD SYSTEM
    ========================================================================== */
 const floatingCards = {}; // id → { overlay, placeholder, originalParent, nextSibling }
@@ -1746,5 +1751,6 @@ window.handleDataUpload = handleDataUpload;
 window.resyncAgentEmails = resyncAgentEmails;
 window.floatCard = floatCard;
 window.dockCard = dockCard;
+window.toggleSidebar = toggleSidebar;
 
 setSignupRole('agent');
