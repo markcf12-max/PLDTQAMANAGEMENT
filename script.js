@@ -14,8 +14,16 @@ import {
     collection, query, where, getDocs, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const TEAM_LEADER_INVITE_CODE = 'PLDT-TL-2026';
-const QUALITY_INVITE_CODE = 'PLDT-QA-2026'; 
+const TEAM_LEADER_INVITE_CODE = 'PLDT-TL-2026';  // kept for legacy but no longer shown in UI
+const QUALITY_INVITE_CODE = 'PLDT-QA-2026';       // kept for legacy but no longer shown in UI
+
+// Maps roster Position values to app roles
+function positionToRole(position) {
+    const p = String(position || '').trim().toLowerCase();
+    if (/quality analyst|qa apprentice|qa sup|quality manager|qa-data scrubber/i.test(p)) return 'quality';
+    if (/supervisor|tl apprentice/i.test(p)) return 'team_leader';
+    return 'agent';
+} 
 
 let lobChartInstance = null;
 let siteChartInstance = null;
@@ -193,63 +201,40 @@ let authFlowInProgress = false;
 
 async function handleSignup() {
     const emailEl = document.getElementById('signupEmail');
-    const pwEl = document.getElementById('signupPassword');
-    const pw2El = document.getElementById('signupPassword2');
-
     const email = emailEl ? emailEl.value.trim().toLowerCase() : '';
-    const pw = pwEl ? pwEl.value : '';
-    const pw2 = pw2El ? pw2El.value : '';
 
-    if (!email || !email.includes('@')) return showAuthMsg('signupMsg', 'Enter your PLDT/SMART Domain email.', false);
+    if (!email || !email.includes('@')) {
+        return showAuthMsg('signupMsg', 'Enter your PLDT/SMART Domain email.', false);
+    }
 
     authFlowInProgress = true;
+    showAuthMsg('signupMsg', 'Checking roster…', false);
+
     try {
-        // Team Leader and Quality accounts still use a custom password + invite code
-        if (signupRole === 'team_leader' || signupRole === 'quality') {
-            if (pw.length < 6) return showAuthMsg('signupMsg', 'Password must be at least 6 characters.', false);
-            if (pw !== pw2) return showAuthMsg('signupMsg', 'Passwords do not match.', false);
-
-            const requiredCode = signupRole === 'team_leader' ? TEAM_LEADER_INVITE_CODE : QUALITY_INVITE_CODE;
-            const codeEl = document.getElementById('supervisorCode');
-            const code = codeEl ? codeEl.value.trim() : '';
-            if (code !== requiredCode) return showAuthMsg('signupMsg', 'Invalid invite code.', false);
-
-            let cred;
-            try {
-                cred = await createUserWithEmailAndPassword(auth, email, pw);
-            } catch (err) {
-                return showAuthMsg('signupMsg', friendlyAuthError(err), false);
-            }
-            await setDoc(doc(db, 'users', cred.user.uid), { email, role: signupRole });
-            await signOut(auth);
-            showAuthMsg('signupMsg', `${signupRole === 'team_leader' ? 'Team Leader' : 'Quality'} account created. Log in now.`, true);
-            clearSignupForm();
-            setTimeout(() => switchAuthTab('login'), 1200);
-            return;
-        }
-
-        // Agent accounts: password = Win ID from roster (no manual password entry)
-        showAuthMsg('signupMsg', 'Checking roster…', false);
+        // All roles use the same flow: look up the roster by domain email,
+        // use Win ID as the password, derive role from Position automatically.
         const rosterSnap = await getDoc(doc(db, 'roster', email));
         if (!rosterSnap.exists()) {
             return showAuthMsg('signupMsg', 'Your domain email was not found on the roster. Ask your supervisor to upload the latest roster first.', false);
         }
+
         const match = rosterSnap.data();
         const winId = String(match.agentId || '').trim().replace(/\.0$/, '');
         if (!winId) {
             return showAuthMsg('signupMsg', 'Your roster entry has no Win ID. Ask your supervisor to update the roster.', false);
         }
 
-        // Win ID must be at least 6 chars for Firebase Auth — pad if shorter (rare)
+        // Role is derived from the Position field in the roster — no invite code needed
+        const role = positionToRole(match.position || match.agentPosition || '');
+        // Pad Win ID to 6 chars minimum (Firebase Auth password requirement)
         const password = winId.length >= 6 ? winId : winId.padEnd(6, '0');
 
         let cred;
         try {
             cred = await createUserWithEmailAndPassword(auth, email, password);
         } catch (err) {
-            // Already registered — that's fine, just tell them to log in
             if (err.code && err.code.includes('email-already-in-use')) {
-                return showAuthMsg('signupMsg', `Account already exists for ${email}. Go to Log In and use your Win ID as the password.`, false);
+                return showAuthMsg('signupMsg', 'Account already exists. Log in with your domain email and Win ID as the password.', false);
             }
             return showAuthMsg('signupMsg', friendlyAuthError(err), false);
         }
@@ -257,12 +242,13 @@ async function handleSignup() {
         try {
             await setDoc(doc(db, 'users', cred.user.uid), {
                 email,
-                role: 'agent',
-                agentName: match.agentName,
+                role,
+                agentName: match.agentName || '',
                 agentId: winId
             });
             await signOut(auth);
-            showAuthMsg('signupMsg', `✅ Account created for ${match.agentName}. Log in with your domain email and Win ID as the password.`, true);
+            const roleLabel = role === 'quality' ? 'Quality' : role === 'team_leader' ? 'Team Leader' : 'Agent';
+            showAuthMsg('signupMsg', `✅ Account created for ${match.agentName || email} (${roleLabel}). Log in with your domain email and Win ID.`, true);
             clearSignupForm();
             setTimeout(() => switchAuthTab('login'), 2000);
         } catch (err) {
@@ -614,6 +600,7 @@ function buildRosterEntries(rows, status) {
     const nameKey = findHeader(rows[0], ['Employee Name', 'Agent Name', 'AGENT/OFFICER NAME', 'Name', 'Full Name']);
     const idKey = findHeader(rows[0], ['Win ID', 'Winid', 'WIN ID', 'ID', 'Employee ID', 'Agent ID']);
     const supervisorKey = findHeader(rows[0], ['Supervisor', 'Supervisor Name', 'Immediate Supervisor', 'Team Leader', 'TEAM LEADER', 'TL Name', 'Sup Name', 'Reporting Manager', 'Manager Name']) || findHeaderByWords(rows[0], [['supervisor'], ['team', 'leader'], ['reporting', 'manager'], ['manager', 'name']]);
+    const positionKey = findHeader(rows[0], ['Position', 'Designation', 'Job Title', 'Role', 'Title']);
 
     if (!nameKey) {
         return { rows: [], error: `Missing an Employee/Agent Name column on the ${status} sheet.` };
@@ -625,6 +612,7 @@ function buildRosterEntries(rows, status) {
             agentName: String(r[nameKey] || '').trim(),
             agentId: idKey ? String(r[idKey] || '').trim() : '',
             teamLeader: supervisorKey ? String(r[supervisorKey] || '').trim() : '',
+            position: positionKey ? String(r[positionKey] || '').trim() : '',
             status
         }))
         .filter(r => r.agentName && (r.email || r.agentId));
