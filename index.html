@@ -43,14 +43,14 @@
         <!-- LOGIN -->
         <div class="auth-body" id="loginPane">
             <h2>Welcome back</h2>
-            <p class="sub">Log in with your work email to view your Quality Score dashboard.</p>
+            <p class="sub">Agents: use your <strong>PLDT/SMART Domain</strong> as username and your <strong>Win ID</strong> as password.</p>
             <div class="form-group">
-                <label>Work Email</label>
-                <input type="email" id="loginEmail" placeholder="name@company.com" autocomplete="username">
+                <label>PLDT/SMART Domain / Work Email</label>
+                <input type="email" id="loginEmail" placeholder="t-yourname@pldt.com.ph" autocomplete="username">
             </div>
             <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password">
+                <label>Password (Win ID for agents)</label>
+                <input type="password" id="loginPassword" placeholder="Win ID or supervisor password" autocomplete="current-password">
             </div>
             <button class="btn-primary" onclick="handleLogin()">Log In</button>
             <div class="auth-msg" id="loginMsg"></div>
@@ -60,7 +60,7 @@
         <!-- SIGNUP -->
         <div class="auth-body" id="signupPane" style="display:none;">
             <h2>Create your account</h2>
-            <p class="sub">Agents are matched automatically to their audit scores using the roster your supervisor uploaded.</p>
+            <p class="sub" id="signupSubtext">Enter your PLDT/SMART Domain email. Your Win ID will be used as your password — no need to create one.</p>
 
             <div class="role-toggle">
                 <label id="roleAgentLabel" class="checked" onclick="setSignupRole('agent')"><span>Agent</span></label>
@@ -69,18 +69,21 @@
             </div>
 
             <div class="form-group">
-                <label>Work Email</label>
-                <input type="email" id="signupEmail" placeholder="name@pldt-agent-email.com" autocomplete="username">
+                <label id="signupEmailLabel">PLDT/SMART Domain</label>
+                <input type="email" id="signupEmail" placeholder="t-yourname@pldt.com.ph" autocomplete="username">
             </div>
 
-            <div class="field-row-2">
-                <div class="form-group">
-                    <label>Password</label>
-                    <input type="password" id="signupPassword" placeholder="••••••••" autocomplete="new-password">
-                </div>
-                <div class="form-group">
-                    <label>Confirm Password</label>
-                    <input type="password" id="signupPassword2" placeholder="••••••••" autocomplete="new-password">
+            <!-- Password fields — hidden for agents, shown for TL/Quality -->
+            <div id="signupPasswordGroup" style="display:none;">
+                <div class="field-row-2">
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="signupPassword" placeholder="••••••••" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm Password</label>
+                        <input type="password" id="signupPassword2" placeholder="••••••••" autocomplete="new-password">
+                    </div>
                 </div>
             </div>
 
@@ -89,11 +92,11 @@
                 <input type="text" id="supervisorCode" placeholder="Enter the invite code given by your admin">
             </div>
 
-            <button class="btn-primary" onclick="handleSignup()">Create Account</button>
+            <button class="btn-primary" onclick="handleSignup()" id="signupBtn">Create Account</button>
             <div class="auth-msg" id="signupMsg"></div>
 
-            <div class="auth-hint">
-                Agent sign-up only succeeds if your email already appears on the roster a Quality account has uploaded. Team Leader and Quality accounts need an invite code from your admin (defaults: <code>PLDT-TL-2026</code> / <code>PLDT-QA-2026</code> — change these in <code>script.js</code> before real use).
+            <div class="auth-hint" id="signupHint">
+                Your <strong>PLDT/SMART Domain email</strong> is your username and your <strong>Win ID</strong> is your password. Both are taken from the roster — no separate credentials needed.
             </div>
         </div>
     </div>
