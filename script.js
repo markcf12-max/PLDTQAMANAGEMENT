@@ -141,19 +141,9 @@ function showAuthMsg(elId, text, ok) {
 // Permanent admin accounts — always get Quality access regardless of roster state.
 // These are used for initial setup (uploading roster, raw data) before any
 // other accounts are configured. Username is the t- prefix without @pldt.com.ph.
-const ADMIN_ACCOUNTS = {
-    't-jrarsaga': { winId: '52500960', role: 'quality', agentName: 'Arsaga, JR' },
-    't-jtagores':  { winId: '52385305', role: 'quality', agentName: 'Tagores, J'  }
-};
-
-let loginRole = 'agent';
-function setLoginRole(role) {
-    loginRole = role;
-    ['agent','team_leader','quality'].forEach(r => {
-        const el = document.getElementById('loginRole' + r.split('_').map(w => w[0].toUpperCase() + w.slice(1)).join(''));
-        if (el) el.classList.toggle('checked', r === role);
-    });
-}
+// Privileged accounts — stored in the roster with Quality role.
+// Login derives role from the roster's position field automatically.
+// No hardcoded bypass or role selector needed.
 
 async function handleLogin() {
     const emailEl = document.getElementById('loginEmail');
@@ -163,35 +153,16 @@ async function handleLogin() {
 
     if (!rawInput || !winId) return showAuthMsg('loginMsg', 'Enter your PLDT domain email and Win ID.', false);
 
-    // Accept bare username (t-jtagores) or full email
+    // Accept bare username (t-jtagores) or full email (t-jtagores@pldt.com.ph)
     const username = rawInput.split('@')[0];
     const email = username + '@pldt.com.ph';
 
     showAuthMsg('loginMsg', 'Checking credentials…', false);
 
     try {
-        // ── Admin bypass — always works, even with empty Firestore ──────────
-        const admin = ADMIN_ACCOUNTS[username];
-        if (admin) {
-            if (winId !== admin.winId) {
-                return showAuthMsg('loginMsg', 'Incorrect Win ID.', false);
-            }
-            currentSession = {
-                email,
-                role: admin.role,
-                agentName: admin.agentName,
-                agentId: winId
-            };
-            try { sessionStorage.setItem('pldt_session', JSON.stringify(currentSession)); } catch (e) {}
-            if (emailEl) emailEl.value = '';
-            if (pwEl) pwEl.value = '';
-            return await enterApp();
-        }
-        // ────────────────────────────────────────────────────────────────────
-
         let match = null;
 
-        // 1. Try new doc ID format: 'winid_<winId>' (after roster re-upload)
+        // 1. Try new doc ID format: 'winid_<winId>' (current format after roster re-upload)
         const byWinId = await getDoc(doc(db, 'roster', 'winid_' + winId));
         if (byWinId.exists()) {
             match = byWinId.data();
@@ -218,11 +189,8 @@ async function handleLogin() {
             return showAuthMsg('loginMsg', 'Credentials not found on the roster. Ask your supervisor to upload the latest roster.', false);
         }
 
-        // Role: use what the user selected on the login form.
-        // Fall back to positionToRole only if roster has a position field.
-        // The selected role is always trusted — supervisors know who they are.
-        const rosterRole = match.position ? positionToRole(match.position) : null;
-        const role = rosterRole || loginRole;
+        // Role is derived from the Position field stored in the roster during upload
+        const role = match.position ? positionToRole(match.position) : 'agent';
 
         currentSession = {
             email: String(match.email || email).toLowerCase(),
@@ -239,7 +207,7 @@ async function handleLogin() {
     } catch (err) {
         console.error('Login error:', err);
         if (String(err.code || err.message || '').includes('permission')) {
-            return showAuthMsg('loginMsg', 'Permission denied. Update Firestore Rules to allow reads on the roster collection.', false);
+            return showAuthMsg('loginMsg', 'Permission denied. Check Firestore Rules in Firebase Console.', false);
         }
         showAuthMsg('loginMsg', 'Login failed: ' + (err.message || 'Please try again.'), false);
     }
@@ -248,11 +216,8 @@ async function handleLogin() {
 function logout() {
     currentSession = null;
     cachedAuditRows = [];
-    loginRole = 'agent';
     try { sessionStorage.removeItem('pldt_session'); } catch (e) {}
     resetToLoggedOutState();
-    // Reset login role toggle back to Agent
-    setLoginRole('agent');
 }
 
 function resetToLoggedOutState() {
@@ -1667,7 +1632,6 @@ function makeDraggable(el, handle) {
    GLOBAL EXPORTS & INITIALIZATION
    ========================================================================== */
 window.handleLogin = handleLogin;
-window.setLoginRole = setLoginRole;
 window.logout = logout;
 window.filterData = filterData;
 window.resetFilters = resetFilters;
