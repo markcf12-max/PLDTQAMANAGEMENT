@@ -141,47 +141,53 @@ function showAuthMsg(elId, text, ok) {
 async function handleLogin() {
     const emailEl = document.getElementById('loginEmail');
     const pwEl = document.getElementById('loginPassword');
-    const email = emailEl ? emailEl.value.trim().toLowerCase() : '';
+    const rawEmail = emailEl ? emailEl.value.trim().toLowerCase() : '';
     const winId = pwEl ? pwEl.value.trim().replace(/\.0$/, '') : '';
 
-    if (!email || !winId) return showAuthMsg('loginMsg', 'Enter your domain email and Win ID.', false);
+    if (!rawEmail || !winId) return showAuthMsg('loginMsg', 'Enter your PLDT domain email and Win ID.', false);
 
-    showAuthMsg('loginMsg', 'Checking roster…', false);
+    // Accept bare username (t-jtagores) and auto-append domain
+    const email = rawEmail.includes('@') ? rawEmail : rawEmail + '@pldt.com.ph';
+
+    showAuthMsg('loginMsg', 'Checking credentials…', false);
 
     try {
-        // Look up the roster doc by domain email
-        const rosterSnap = await getDoc(doc(db, 'roster', email));
+        // Look up by Win ID — stored as 'winid_<winId>' so no auth is needed
+        const rosterSnap = await getDoc(doc(db, 'roster', 'winid_' + winId));
         if (!rosterSnap.exists()) {
-            return showAuthMsg('loginMsg', 'Email not found on the roster. Ask your supervisor to upload the latest roster.', false);
+            return showAuthMsg('loginMsg', 'Win ID not found on the roster. Check your Win ID or ask your supervisor to upload the latest roster.', false);
         }
 
         const match = rosterSnap.data();
-        const storedWinId = String(match.agentId || '').trim().replace(/\.0$/, '');
 
-        if (!storedWinId) {
-            return showAuthMsg('loginMsg', 'Your roster entry has no Win ID. Contact your supervisor.', false);
-        }
-        if (winId !== storedWinId) {
-            return showAuthMsg('loginMsg', 'Incorrect Win ID. Please check and try again.', false);
+        // Verify the email matches (case-insensitive, strip domain if user typed bare username)
+        const storedEmail = String(match.email || '').trim().toLowerCase();
+        const storedParts = storedEmail.split('@')[0];   // e.g. 't-jtagores'
+        const inputParts  = email.split('@')[0];
+
+        if (storedEmail && storedParts !== inputParts) {
+            return showAuthMsg('loginMsg', 'Email does not match the Win ID on the roster.', false);
         }
 
-        // Credentials match — set session from roster data
+        // Credentials valid — build session from roster data
         const role = positionToRole(match.position || '');
         currentSession = {
-            email,
+            email: storedEmail || email,
             role,
             agentName: match.agentName || '',
-            agentId: storedWinId
+            agentId: winId
         };
 
-        // Persist session in sessionStorage so page refresh keeps them logged in
         try { sessionStorage.setItem('pldt_session', JSON.stringify(currentSession)); } catch (e) {}
-
         if (emailEl) emailEl.value = '';
         if (pwEl) pwEl.value = '';
         await enterApp();
     } catch (err) {
         console.error('Login error:', err);
+        // Firestore permission error most likely means rules need updating
+        if (String(err.code || '').includes('permission') || String(err.message || '').includes('permission')) {
+            return showAuthMsg('loginMsg', 'Firestore rules are blocking the login. Go to Firebase Console → Firestore → Rules and allow reads on the roster collection.', false);
+        }
         showAuthMsg('loginMsg', 'Login failed: ' + (err.message || 'Please try again.'), false);
     }
 }
@@ -459,22 +465,31 @@ function buildRosterEntries(rows, status) {
     }
 
     const entries = rows
-        .map(r => ({
-            email: emailKey ? String(r[emailKey] || '').trim().toLowerCase() : '',
-            agentName: String(r[nameKey] || '').trim(),
-            agentId: idKey ? String(r[idKey] || '').trim() : '',
-            teamLeader: supervisorKey ? String(r[supervisorKey] || '').trim() : '',
-            position: positionKey ? String(r[positionKey] || '').trim() : '',
-            status
-        }))
-        .filter(r => r.agentName && (r.email || r.agentId));
+        .map(r => {
+            // Use PLDT/SMART Domain v2 for full email, but only keep @pldt.com.ph
+            // Filter out @supplier.smart.com.ph and other non-PLDT domains
+            let email = emailKey ? String(r[emailKey] || '').trim().toLowerCase() : '';
+            if (email && !email.includes('@pldt.com.ph')) email = '';
+
+            const agentId = idKey ? normalizeEmployeeId(String(r[idKey] || '')) : '';
+            return {
+                email,
+                agentName: String(r[nameKey] || '').trim(),
+                agentId,
+                teamLeader: supervisorKey ? String(r[supervisorKey] || '').trim() : '',
+                position: positionKey ? String(r[positionKey] || '').trim() : '',
+                status
+            };
+        })
+        .filter(r => r.agentName && r.agentId); // Win ID is required for login
 
     return { rows: entries, error: null };
 }
 
 function rosterDocId(entry) {
-    if (entry.email) return entry.email;
-    if (entry.agentId) return 'id_' + normalizeEmployeeId(entry.agentId);
+    // Use Win ID as the primary doc ID — it's what users type at login,
+    // so getDoc(db, 'roster', winId) works as a simple direct lookup.
+    if (entry.agentId) return 'winid_' + normalizeEmployeeId(entry.agentId);
     return 'name_' + normalizeName(entry.agentName).replace(/\s+/g, '_').toLowerCase();
 }
 
