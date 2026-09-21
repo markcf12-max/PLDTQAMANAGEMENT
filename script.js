@@ -1,14 +1,7 @@
 /* ==========================================================================
    FIREBASE IMPORTS
    ========================================================================== */
-import { auth, db } from './firebase-config.js';
-import {
-    createUserWithEmailAndPassword,
-    signInWithEmailAndPassword,
-    signOut,
-    deleteUser,
-    onAuthStateChanged
-} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { db } from './firebase-config.js';
 import {
     doc, getDoc, setDoc, deleteDoc,
     collection, query, where, getDocs, writeBatch
@@ -135,61 +128,9 @@ function getNormalizedRole(roleStr) {
 /* ==========================================================================
    AUTH & USER MANAGEMENT
    ========================================================================== */
-function switchAuthTab(which) {
-    const tabLogin = document.getElementById('tabLogin');
-    const tabSignup = document.getElementById('tabSignup');
-    const loginPane = document.getElementById('loginPane');
-    const signupPane = document.getElementById('signupPane');
-
-    if (tabLogin) tabLogin.classList.toggle('active', which === 'login');
-    if (tabSignup) tabSignup.classList.toggle('active', which === 'signup');
-    if (loginPane) loginPane.style.display = which === 'login' ? 'block' : 'none';
-    if (signupPane) signupPane.style.display = which === 'signup' ? 'block' : 'none';
-}
-
-let signupRole = 'agent';
-function setSignupRole(role) {
-    signupRole = role;
-    const roleAgentLabel = document.getElementById('roleAgentLabel');
-    const roleTeamLeaderLabel = document.getElementById('roleTeamLeaderLabel');
-    const roleQualityLabel = document.getElementById('roleQualityLabel');
-    const supervisorCodeGroup = document.getElementById('supervisorCodeGroup');
-    const supervisorCodeLabel = document.getElementById('supervisorCodeLabel');
-    const signupPasswordGroup = document.getElementById('signupPasswordGroup');
-    const signupSubtext = document.getElementById('signupSubtext');
-    const signupEmailLabel = document.getElementById('signupEmailLabel');
-    const signupHint = document.getElementById('signupHint');
-
-    if (roleAgentLabel) roleAgentLabel.classList.toggle('checked', role === 'agent');
-    if (roleTeamLeaderLabel) roleTeamLeaderLabel.classList.toggle('checked', role === 'team_leader');
-    if (roleQualityLabel) roleQualityLabel.classList.toggle('checked', role === 'quality');
-
-    const isAgent = role === 'agent';
-    const needsCode = role === 'team_leader' || role === 'quality';
-
-    // Agents: no password fields — Win ID is used automatically from the roster
-    if (signupPasswordGroup) signupPasswordGroup.style.display = isAgent ? 'none' : 'block';
-    if (supervisorCodeGroup) supervisorCodeGroup.style.display = needsCode ? 'block' : 'none';
-
-    if (needsCode && supervisorCodeLabel) {
-        supervisorCodeLabel.textContent = role === 'team_leader' ? 'Team Leader Invite Code' : 'Quality Invite Code';
-    }
-
-    if (signupEmailLabel) {
-        signupEmailLabel.textContent = isAgent ? 'PLDT/SMART Domain' : 'Work Email';
-    }
-    if (signupSubtext) {
-        signupSubtext.textContent = isAgent
-            ? 'Enter your PLDT/SMART Domain email. Your Win ID will be used as your password — no need to create one.'
-            : 'Create a password for your supervisor account. An invite code is required.';
-    }
-    if (signupHint) {
-        signupHint.innerHTML = isAgent
-            ? 'Your <strong>PLDT/SMART Domain email</strong> is your username and your <strong>Win ID</strong> is your password. Both are taken from the roster — no separate credentials needed.'
-            : `Team Leader and Quality accounts need an invite code from your admin (defaults: <code>PLDT-TL-2026</code> / <code>PLDT-QA-2026</code>).`;
-    }
-}
-
+/* ==========================================================================
+   SESSION & AUTH (Roster-based — no Firebase Auth account creation needed)
+   ========================================================================== */
 function showAuthMsg(elId, text, ok) {
     const el = document.getElementById(elId);
     if (!el) return;
@@ -197,176 +138,87 @@ function showAuthMsg(elId, text, ok) {
     el.className = 'auth-msg ' + (ok ? 'ok' : 'error');
 }
 
-let authFlowInProgress = false;
-
-async function handleSignup() {
-    const emailEl = document.getElementById('signupEmail');
-    const email = emailEl ? emailEl.value.trim().toLowerCase() : '';
-
-    if (!email || !email.includes('@')) {
-        return showAuthMsg('signupMsg', 'Enter your PLDT/SMART Domain email.', false);
-    }
-
-    authFlowInProgress = true;
-    showAuthMsg('signupMsg', 'Checking roster…', false);
-
-    try {
-        // All roles use the same flow: look up the roster by domain email,
-        // use Win ID as the password, derive role from Position automatically.
-        const rosterSnap = await getDoc(doc(db, 'roster', email));
-        if (!rosterSnap.exists()) {
-            return showAuthMsg('signupMsg', 'Your domain email was not found on the roster. Ask your supervisor to upload the latest roster first.', false);
-        }
-
-        const match = rosterSnap.data();
-        const winId = String(match.agentId || '').trim().replace(/\.0$/, '');
-        if (!winId) {
-            return showAuthMsg('signupMsg', 'Your roster entry has no Win ID. Ask your supervisor to update the roster.', false);
-        }
-
-        // Role is derived from the Position field in the roster — no invite code needed
-        const role = positionToRole(match.position || match.agentPosition || '');
-        // Pad Win ID to 6 chars minimum (Firebase Auth password requirement)
-        const password = winId.length >= 6 ? winId : winId.padEnd(6, '0');
-
-        let cred;
-        try {
-            cred = await createUserWithEmailAndPassword(auth, email, password);
-        } catch (err) {
-            if (err.code && err.code.includes('email-already-in-use')) {
-                return showAuthMsg('signupMsg', 'Account already exists. Log in with your domain email and Win ID as the password.', false);
-            }
-            return showAuthMsg('signupMsg', friendlyAuthError(err), false);
-        }
-
-        try {
-            await setDoc(doc(db, 'users', cred.user.uid), {
-                email,
-                role,
-                agentName: match.agentName || '',
-                agentId: winId
-            });
-            await signOut(auth);
-            const roleLabel = role === 'quality' ? 'Quality' : role === 'team_leader' ? 'Team Leader' : 'Agent';
-            showAuthMsg('signupMsg', `✅ Account created for ${match.agentName || email} (${roleLabel}). Log in with your domain email and Win ID.`, true);
-            clearSignupForm();
-            setTimeout(() => switchAuthTab('login'), 2000);
-        } catch (err) {
-            try { await deleteUser(cred.user); } catch (e2) {}
-            showAuthMsg('signupMsg', friendlyAuthError(err), false);
-        }
-    } finally {
-        authFlowInProgress = false;
-    }
-}
-
-function clearSignupForm() {
-    ['signupEmail', 'signupPassword', 'signupPassword2', 'supervisorCode'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.value = '';
-    });
-}
-
-async function quickAccess(role) {
-    const email = prompt(`Enter ${role.replace('_', ' ')} email:`);
-    const password = prompt("Enter password:");
-
-    if (!email || !password) return;
-
-    authFlowInProgress = true;
-    try {
-        const cred = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
-        const profileSnap = await getDoc(doc(db, 'users', cred.user.uid));
-        
-        if (!profileSnap.exists()) {
-            return showAuthMsg('loginMsg', 'No user profile document found in Firestore for this account.', false);
-        }
-        currentSession = { uid: cred.user.uid, ...profileSnap.data() };
-        await enterApp();
-    } catch (err) {
-        showAuthMsg('loginMsg', friendlyAuthError(err), false);
-    } finally {
-        authFlowInProgress = false;
-    }
-}
-
 async function handleLogin() {
     const emailEl = document.getElementById('loginEmail');
     const pwEl = document.getElementById('loginPassword');
     const email = emailEl ? emailEl.value.trim().toLowerCase() : '';
-    const pw = pwEl ? pwEl.value : '';
+    const winId = pwEl ? pwEl.value.trim().replace(/\.0$/, '') : '';
 
-    if (!email || !pw) return showAuthMsg('loginMsg', 'Enter email and password.', false);
+    if (!email || !winId) return showAuthMsg('loginMsg', 'Enter your domain email and Win ID.', false);
 
-    authFlowInProgress = true;
+    showAuthMsg('loginMsg', 'Checking roster…', false);
+
     try {
-        const cred = await signInWithEmailAndPassword(auth, email, pw);
-        const profileSnap = await getDoc(doc(db, 'users', cred.user.uid));
-        if (!profileSnap.exists()) {
-            await signOut(auth);
-            return showAuthMsg('loginMsg', 'No user profile found in database (/users/' + cred.user.uid + ').', false);
+        // Look up the roster doc by domain email
+        const rosterSnap = await getDoc(doc(db, 'roster', email));
+        if (!rosterSnap.exists()) {
+            return showAuthMsg('loginMsg', 'Email not found on the roster. Ask your supervisor to upload the latest roster.', false);
         }
-        currentSession = { uid: cred.user.uid, ...profileSnap.data() };
+
+        const match = rosterSnap.data();
+        const storedWinId = String(match.agentId || '').trim().replace(/\.0$/, '');
+
+        if (!storedWinId) {
+            return showAuthMsg('loginMsg', 'Your roster entry has no Win ID. Contact your supervisor.', false);
+        }
+        if (winId !== storedWinId) {
+            return showAuthMsg('loginMsg', 'Incorrect Win ID. Please check and try again.', false);
+        }
+
+        // Credentials match — set session from roster data
+        const role = positionToRole(match.position || '');
+        currentSession = {
+            email,
+            role,
+            agentName: match.agentName || '',
+            agentId: storedWinId
+        };
+
+        // Persist session in sessionStorage so page refresh keeps them logged in
+        try { sessionStorage.setItem('pldt_session', JSON.stringify(currentSession)); } catch (e) {}
+
         if (emailEl) emailEl.value = '';
         if (pwEl) pwEl.value = '';
         await enterApp();
     } catch (err) {
-        showAuthMsg('loginMsg', friendlyAuthError(err), false);
-    } finally {
-        authFlowInProgress = false;
+        console.error('Login error:', err);
+        showAuthMsg('loginMsg', 'Login failed: ' + (err.message || 'Please try again.'), false);
     }
 }
 
 function logout() {
-    signOut(auth);
-}
-
-function friendlyAuthError(err) {
-    const code = err && err.code ? err.code : '';
-    if (code.includes('email-already-in-use')) return 'An account with this email already exists.';
-    if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')) return 'Incorrect email or password.';
-    if (code.includes('weak-password')) return 'Password must be at least 6 characters.';
-    if (code.includes('invalid-email')) return 'Enter a valid email address.';
-    return 'Authentication error: ' + (err && err.message ? err.message : 'Please try again.');
+    currentSession = null;
+    cachedAuditRows = [];
+    try { sessionStorage.removeItem('pldt_session'); } catch (e) {}
+    resetToLoggedOutState();
 }
 
 function resetToLoggedOutState() {
     currentSession = null;
     cachedAuditRows = [];
-
     const appScreen = document.getElementById('appScreen');
     const authScreen = document.getElementById('authScreen');
     const sessionChip = document.getElementById('sessionChip');
-
     if (appScreen) appScreen.style.display = 'none';
     if (authScreen) authScreen.style.display = 'flex';
     if (sessionChip) sessionChip.style.display = 'none';
-
-    clearSignupForm();
-    switchAuthTab('login');
 }
 
-onAuthStateChanged(auth, async (user) => {
-    if (authFlowInProgress) return;
-
-    if (!user) {
-        resetToLoggedOutState();
-        return;
-    }
-
+// Restore session from sessionStorage on page load (survives F5, not tab close)
+(function restoreSession() {
     try {
-        const profileSnap = await getDoc(doc(db, 'users', user.uid));
-        if (!profileSnap.exists()) {
-            console.error(`User authenticated (${user.uid}), but no user record in /users collection.`);
-            await signOut(auth);
-            return;
+        const saved = sessionStorage.getItem('pldt_session');
+        if (saved) {
+            currentSession = JSON.parse(saved);
+            // enterApp is called after DOMContentLoaded — trigger after scripts load
+            window.addEventListener('DOMContentLoaded', () => enterApp());
+        } else {
+            resetToLoggedOutState();
         }
-        currentSession = { uid: user.uid, ...profileSnap.data() };
-        await enterApp();
-    } catch (err) {
-        console.error("Auth state error:", err);
+    } catch (e) {
+        resetToLoggedOutState();
     }
-});
+})();
 
 async function enterApp() {
     if (!currentSession) return;
@@ -1743,11 +1595,7 @@ function makeDraggable(el, handle) {
 /* ==========================================================================
    GLOBAL EXPORTS & INITIALIZATION
    ========================================================================== */
-window.switchAuthTab = switchAuthTab;
-window.setSignupRole = setSignupRole;
-window.handleSignup = handleSignup;
 window.handleLogin = handleLogin;
-window.quickAccess = quickAccess;
 window.logout = logout;
 window.filterData = filterData;
 window.resetFilters = resetFilters;
@@ -1758,5 +1606,3 @@ window.resyncAgentEmails = resyncAgentEmails;
 window.floatCard = floatCard;
 window.dockCard = dockCard;
 window.toggleSidebar = toggleSidebar;
-
-setSignupRole('agent');
