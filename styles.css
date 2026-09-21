@@ -93,30 +93,41 @@ body {
     background: white;
     width: 100%;
     max-width: 420px;
-    border-radius: 6px;
+    border-radius: 10px;
     border: 1px solid var(--card-border);
-    box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.10);
     overflow: hidden;
 }
 
-.auth-tabs { display: flex; }
-.auth-tab {
-    flex: 1;
+.auth-card-header {
+    background: var(--pldt-red);
+    padding: 24px 24px 20px;
     text-align: center;
-    padding: 12px;
-    font-size: 12px;
-    font-weight: bold;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    cursor: pointer;
-    background: #f2f2f2;
-    color: #777;
-    border-bottom: 3px solid transparent;
 }
-.auth-tab.active {
+.auth-card-header h2 {
+    margin: 8px 0 4px;
+    font-size: 22px;
+    color: white;
+    font-weight: 900;
+    letter-spacing: 0.5px;
+}
+.auth-card-header .sub {
+    margin: 0;
+    font-size: 12px;
+    color: rgba(255,255,255,0.85);
+    line-height: 1.5;
+}
+.auth-logo-row {
+    margin-bottom: 4px;
+}
+.auth-brand {
     background: white;
     color: var(--pldt-red);
-    border-bottom-color: var(--pldt-red);
+    font-weight: 900;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    letter-spacing: 0.2px;
 }
 
 .auth-body { padding: 24px; }
