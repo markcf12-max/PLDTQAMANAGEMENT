@@ -13,8 +13,8 @@ const QUALITY_INVITE_CODE = 'PLDT-QA-2026';       // kept for legacy but no long
 // Maps roster Position values to app roles
 function positionToRole(position) {
     const p = String(position || '').trim().toLowerCase();
-    if (/quality analyst|qa apprentice|qa sup|quality manager|qa-data scrubber/i.test(p)) return 'quality';
-    if (/supervisor|tl apprentice/i.test(p)) return 'team_leader';
+    if (/quality analyst|qa apprentice|qa sup|quality manager|qa-data scrubber|quality/i.test(p)) return 'quality';
+    if (/supervisor|tl apprentice|team leader|sr\. supervisor/i.test(p)) return 'team_leader';
     return 'agent';
 } 
 
@@ -141,38 +141,52 @@ function showAuthMsg(elId, text, ok) {
 async function handleLogin() {
     const emailEl = document.getElementById('loginEmail');
     const pwEl = document.getElementById('loginPassword');
-    const rawEmail = emailEl ? emailEl.value.trim().toLowerCase() : '';
+    const rawInput = emailEl ? emailEl.value.trim().toLowerCase() : '';
     const winId = pwEl ? pwEl.value.trim().replace(/\.0$/, '') : '';
 
-    if (!rawEmail || !winId) return showAuthMsg('loginMsg', 'Enter your PLDT domain email and Win ID.', false);
+    if (!rawInput || !winId) return showAuthMsg('loginMsg', 'Enter your PLDT domain email and Win ID.', false);
 
-    // Accept bare username (t-jtagores) and auto-append domain
-    const email = rawEmail.includes('@') ? rawEmail : rawEmail + '@pldt.com.ph';
+    // Accept bare username (t-jtagores) or full email (t-jtagores@pldt.com.ph)
+    const username = rawInput.split('@')[0]; // e.g. 't-jtagores'
+    const email = username + '@pldt.com.ph';
 
     showAuthMsg('loginMsg', 'Checking credentials…', false);
 
     try {
-        // Look up by Win ID — stored as 'winid_<winId>' so no auth is needed
-        const rosterSnap = await getDoc(doc(db, 'roster', 'winid_' + winId));
-        if (!rosterSnap.exists()) {
-            return showAuthMsg('loginMsg', 'Win ID not found on the roster. Check your Win ID or ask your supervisor to upload the latest roster.', false);
+        let match = null;
+
+        // 1. Try new format: doc ID = 'winid_<winId>' (after roster re-upload)
+        const byWinId = await getDoc(doc(db, 'roster', 'winid_' + winId));
+        if (byWinId.exists()) {
+            match = byWinId.data();
+            // Verify the email username matches
+            const storedUsername = String(match.email || '').split('@')[0].toLowerCase();
+            if (storedUsername && storedUsername !== username) {
+                return showAuthMsg('loginMsg', 'Email does not match this Win ID. Please check your credentials.', false);
+            }
         }
 
-        const match = rosterSnap.data();
-
-        // Verify the email matches (case-insensitive, strip domain if user typed bare username)
-        const storedEmail = String(match.email || '').trim().toLowerCase();
-        const storedParts = storedEmail.split('@')[0];   // e.g. 't-jtagores'
-        const inputParts  = email.split('@')[0];
-
-        if (storedEmail && storedParts !== inputParts) {
-            return showAuthMsg('loginMsg', 'Email does not match the Win ID on the roster.', false);
+        // 2. Fall back to old format: doc ID = full email (before roster re-upload)
+        if (!match) {
+            const byEmail = await getDoc(doc(db, 'roster', email));
+            if (byEmail.exists()) {
+                const d = byEmail.data();
+                const storedWinId = normalizeEmployeeId(String(d.agentId || ''));
+                if (storedWinId !== winId) {
+                    return showAuthMsg('loginMsg', 'Incorrect Win ID. Please check and try again.', false);
+                }
+                match = d;
+            }
         }
 
-        // Credentials valid — build session from roster data
+        if (!match) {
+            return showAuthMsg('loginMsg', 'Credentials not found on the roster. Make sure your supervisor has uploaded the latest roster, then try again.', false);
+        }
+
+        // Build session from roster data
         const role = positionToRole(match.position || '');
         currentSession = {
-            email: storedEmail || email,
+            email: String(match.email || email).toLowerCase(),
             role,
             agentName: match.agentName || '',
             agentId: winId
@@ -182,11 +196,11 @@ async function handleLogin() {
         if (emailEl) emailEl.value = '';
         if (pwEl) pwEl.value = '';
         await enterApp();
+
     } catch (err) {
         console.error('Login error:', err);
-        // Firestore permission error most likely means rules need updating
-        if (String(err.code || '').includes('permission') || String(err.message || '').includes('permission')) {
-            return showAuthMsg('loginMsg', 'Firestore rules are blocking the login. Go to Firebase Console → Firestore → Rules and allow reads on the roster collection.', false);
+        if (String(err.code || err.message || '').includes('permission')) {
+            return showAuthMsg('loginMsg', 'Permission denied. Update Firestore Rules to allow reads on the roster collection (see firestore.rules file).', false);
         }
         showAuthMsg('loginMsg', 'Login failed: ' + (err.message || 'Please try again.'), false);
     }
