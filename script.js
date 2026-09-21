@@ -24,52 +24,29 @@ let siteChartInstance = null;
    FIRESTORE BATCH HELPERS (Concurrent Writes)
    ========================================================================== */
 async function batchWriteDocs(collectionName, docs, idFn) {
-    const MAX_CONCURRENT = 4;
     const chunks = [];
     for (let i = 0; i < docs.length; i += 400) chunks.push(docs.slice(i, i + 400));
-    let idx = 0;
-
-    async function runNext() {
-        if (idx >= chunks.length) return;
-        const chunk = chunks[idx++];
+    for (const chunk of chunks) {
         const batch = writeBatch(db);
         chunk.forEach(d => {
             const ref = idFn ? doc(db, collectionName, idFn(d)) : doc(collection(db, collectionName));
             batch.set(ref, d);
         });
         await batch.commit();
-        await runNext();
+        await new Promise(r => setTimeout(r, 200));
     }
-
-    const workers = [];
-    for (let i = 0; i < Math.min(MAX_CONCURRENT, chunks.length); i++) {
-        workers.push(runNext());
-    }
-    await Promise.all(workers);
 }
 
 async function clearCollection(collectionName) {
     const snap = await getDocs(collection(db, collectionName));
     const ids = snap.docs.map(d => d.id);
-    const MAX_CONCURRENT = 4;
-    let idx = 0;
-
-    async function runNext() {
-        if (idx >= ids.length) return;
-        const start = idx;
-        idx = Math.min(idx + 400, ids.length);
-        const chunk = ids.slice(start, idx);
+    for (let i = 0; i < ids.length; i += 400) {
+        const chunk = ids.slice(i, i + 400);
         const batch = writeBatch(db);
         chunk.forEach(id => batch.delete(doc(db, collectionName, id)));
         await batch.commit();
-        await runNext();
+        await new Promise(r => setTimeout(r, 200));
     }
-
-    const workers = [];
-    for (let i = 0; i < Math.min(MAX_CONCURRENT, Math.ceil(ids.length / 400)); i++) {
-        workers.push(runNext());
-    }
-    await Promise.all(workers);
 }
 
 async function replaceAuditData(rows, onProgress = null) {
@@ -77,33 +54,22 @@ async function replaceAuditData(rows, onProgress = null) {
         if (typeof onProgress === 'function') onProgress(phase, done, total);
     };
 
-    // Commit batches in a sliding window of MAX_CONCURRENT at a time.
-    // Firing all batches at once (Promise.all over hundreds of batches) floods
-    // Firestore's write stream and triggers "resource-exhausted" / backoff errors.
-    // A window of 4 keeps throughput high while staying well under the limit.
-    const MAX_CONCURRENT = 4;
+    // Commit batches strictly one at a time with a small pause between each.
+    // Firestore's WebChannel write stream has a hard pipeline limit — even
+    // 2-4 concurrent batches can exhaust it on the free Spark plan with 10k+
+    // docs. Sequential + 200ms gap keeps us well within the stream budget.
+    const BATCH_DELAY_MS = 200;
 
     async function commitBatchesWindowed(phase, batches) {
         const total = batches.reduce((s, b) => s + b.count, 0);
         report(phase, 0, total);
         let done = 0;
-        let idx = 0;
-
-        async function runNext() {
-            if (idx >= batches.length) return;
-            const { batch, count } = batches[idx++];
+        for (const { batch, count } of batches) {
             await batch.commit();
             done += count;
             report(phase, done, total);
-            await runNext();
+            if (done < total) await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
         }
-
-        // Start up to MAX_CONCURRENT workers
-        const workers = [];
-        for (let i = 0; i < Math.min(MAX_CONCURRENT, batches.length); i++) {
-            workers.push(runNext());
-        }
-        await Promise.all(workers);
     }
 
     // DELETE — read every doc that actually exists rather than relying on a
@@ -181,15 +147,38 @@ function setSignupRole(role) {
     const roleQualityLabel = document.getElementById('roleQualityLabel');
     const supervisorCodeGroup = document.getElementById('supervisorCodeGroup');
     const supervisorCodeLabel = document.getElementById('supervisorCodeLabel');
+    const signupPasswordGroup = document.getElementById('signupPasswordGroup');
+    const signupSubtext = document.getElementById('signupSubtext');
+    const signupEmailLabel = document.getElementById('signupEmailLabel');
+    const signupHint = document.getElementById('signupHint');
 
     if (roleAgentLabel) roleAgentLabel.classList.toggle('checked', role === 'agent');
     if (roleTeamLeaderLabel) roleTeamLeaderLabel.classList.toggle('checked', role === 'team_leader');
     if (roleQualityLabel) roleQualityLabel.classList.toggle('checked', role === 'quality');
-    
+
+    const isAgent = role === 'agent';
     const needsCode = role === 'team_leader' || role === 'quality';
+
+    // Agents: no password fields — Win ID is used automatically from the roster
+    if (signupPasswordGroup) signupPasswordGroup.style.display = isAgent ? 'none' : 'block';
     if (supervisorCodeGroup) supervisorCodeGroup.style.display = needsCode ? 'block' : 'none';
+
     if (needsCode && supervisorCodeLabel) {
         supervisorCodeLabel.textContent = role === 'team_leader' ? 'Team Leader Invite Code' : 'Quality Invite Code';
+    }
+
+    if (signupEmailLabel) {
+        signupEmailLabel.textContent = isAgent ? 'PLDT/SMART Domain' : 'Work Email';
+    }
+    if (signupSubtext) {
+        signupSubtext.textContent = isAgent
+            ? 'Enter your PLDT/SMART Domain email. Your Win ID will be used as your password — no need to create one.'
+            : 'Create a password for your supervisor account. An invite code is required.';
+    }
+    if (signupHint) {
+        signupHint.innerHTML = isAgent
+            ? 'Your <strong>PLDT/SMART Domain email</strong> is your username and your <strong>Win ID</strong> is your password. Both are taken from the roster — no separate credentials needed.'
+            : `Team Leader and Quality accounts need an invite code from your admin (defaults: <code>PLDT-TL-2026</code> / <code>PLDT-QA-2026</code>).`;
     }
 }
 
@@ -206,18 +195,20 @@ async function handleSignup() {
     const emailEl = document.getElementById('signupEmail');
     const pwEl = document.getElementById('signupPassword');
     const pw2El = document.getElementById('signupPassword2');
-    
+
     const email = emailEl ? emailEl.value.trim().toLowerCase() : '';
     const pw = pwEl ? pwEl.value : '';
     const pw2 = pw2El ? pw2El.value : '';
 
-    if (!email || !email.includes('@')) return showAuthMsg('signupMsg', 'Enter a valid work email.', false);
-    if (pw.length < 6) return showAuthMsg('signupMsg', 'Password must be at least 6 characters.', false);
-    if (pw !== pw2) return showAuthMsg('signupMsg', 'Passwords do not match.', false);
+    if (!email || !email.includes('@')) return showAuthMsg('signupMsg', 'Enter your PLDT/SMART Domain email.', false);
 
     authFlowInProgress = true;
     try {
+        // Team Leader and Quality accounts still use a custom password + invite code
         if (signupRole === 'team_leader' || signupRole === 'quality') {
+            if (pw.length < 6) return showAuthMsg('signupMsg', 'Password must be at least 6 characters.', false);
+            if (pw !== pw2) return showAuthMsg('signupMsg', 'Passwords do not match.', false);
+
             const requiredCode = signupRole === 'team_leader' ? TEAM_LEADER_INVITE_CODE : QUALITY_INVITE_CODE;
             const codeEl = document.getElementById('supervisorCode');
             const code = codeEl ? codeEl.value.trim() : '';
@@ -237,31 +228,43 @@ async function handleSignup() {
             return;
         }
 
+        // Agent accounts: password = Win ID from roster (no manual password entry)
+        showAuthMsg('signupMsg', 'Checking roster…', false);
+        const rosterSnap = await getDoc(doc(db, 'roster', email));
+        if (!rosterSnap.exists()) {
+            return showAuthMsg('signupMsg', 'Your domain email was not found on the roster. Ask your supervisor to upload the latest roster first.', false);
+        }
+        const match = rosterSnap.data();
+        const winId = String(match.agentId || '').trim().replace(/\.0$/, '');
+        if (!winId) {
+            return showAuthMsg('signupMsg', 'Your roster entry has no Win ID. Ask your supervisor to update the roster.', false);
+        }
+
+        // Win ID must be at least 6 chars for Firebase Auth — pad if shorter (rare)
+        const password = winId.length >= 6 ? winId : winId.padEnd(6, '0');
+
         let cred;
         try {
-            cred = await createUserWithEmailAndPassword(auth, email, pw);
+            cred = await createUserWithEmailAndPassword(auth, email, password);
         } catch (err) {
+            // Already registered — that's fine, just tell them to log in
+            if (err.code && err.code.includes('email-already-in-use')) {
+                return showAuthMsg('signupMsg', `Account already exists for ${email}. Go to Log In and use your Win ID as the password.`, false);
+            }
             return showAuthMsg('signupMsg', friendlyAuthError(err), false);
         }
 
         try {
-            const rosterSnap = await getDoc(doc(db, 'roster', email));
-            if (!rosterSnap.exists()) {
-                await deleteUser(cred.user);
-                return showAuthMsg('signupMsg', 'Email not on agent roster. Ask supervisor to add you first.', false);
-            }
-            const match = rosterSnap.data();
-
             await setDoc(doc(db, 'users', cred.user.uid), {
                 email,
                 role: 'agent',
                 agentName: match.agentName,
-                agentId: match.agentId || ''
+                agentId: winId
             });
             await signOut(auth);
-            showAuthMsg('signupMsg', `Account created & matched to "${match.agentName}". You can log in now.`, true);
+            showAuthMsg('signupMsg', `✅ Account created for ${match.agentName}. Log in with your domain email and Win ID as the password.`, true);
             clearSignupForm();
-            setTimeout(() => switchAuthTab('login'), 1200);
+            setTimeout(() => switchAuthTab('login'), 2000);
         } catch (err) {
             try { await deleteUser(cred.user); } catch (e2) {}
             showAuthMsg('signupMsg', friendlyAuthError(err), false);
@@ -773,17 +776,11 @@ async function resyncAgentEmails() {
             batches.push(batch);
         }
 
-        // Windowed commit — max 4 in-flight at a time to avoid write stream exhaustion
-        const MAX_CONCURRENT = 4;
-        let bIdx = 0;
-        async function runNext() {
-            if (bIdx >= batches.length) return;
-            await batches[bIdx++].commit();
-            await runNext();
+        // Sequential commits with delay — prevents write stream exhaustion
+        for (const batch of batches) {
+            await batch.commit();
+            await new Promise(r => setTimeout(r, 200));
         }
-        const workers = [];
-        for (let i = 0; i < Math.min(MAX_CONCURRENT, batches.length); i++) workers.push(runNext());
-        await Promise.all(workers);
 
         // Update the in-memory cache directly — the data is already in memory
         // from the dataSnap we read above, updated with the new email/TL/status.
