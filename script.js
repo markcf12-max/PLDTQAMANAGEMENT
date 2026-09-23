@@ -12,9 +12,11 @@ const QUALITY_INVITE_CODE = 'PLDT-QA-2026';       // kept for legacy but no long
 
 // Maps roster Position values to app roles
 function positionToRole(position) {
-    const p = String(position || '').trim().toLowerCase();
-    if (/quality analyst|qa apprentice|qa sup|quality manager|qa-data scrubber|quality/i.test(p)) return 'quality';
-    if (/supervisor|tl apprentice|team leader|sr\. supervisor/i.test(p)) return 'team_leader';
+    const p = String(position || '').trim();
+    // Quality — all QA and Quality titled positions get full dashboard + upload access
+    if (/qa apprentice|qa sup|qa-data scrubber|quality analyst|quality manager|quality/i.test(p)) return 'quality';
+    // Team Leader — supervisors get dashboard view but not upload
+    if (/supervisor|tl apprentice|team leader|sr\.\s*supervisor/i.test(p)) return 'team_leader';
     return 'agent';
 } 
 
@@ -1458,11 +1460,39 @@ async function renderAgentView() {
             ? issues.map(i => `<span class="tag ${i.category.replace(/\s|&/g, '')}">${escapeHtml(i.label)}</span>`).join('')
             : `<span class="no-issues-note">✓ No parameters flagged on this audit.</span>`;
 
-        const comments = ['RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS']
+        // Standard comment columns (Reliable / Personable / Fast)
+        const stdComments = ['RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS']
             .map(f => String(r[f] || '').trim())
             .filter(c => c && !NON_ISSUE_VALUES.has(c.toUpperCase()));
-        const commentsHtml = comments.length
-            ? `<div class="audit-comments">${comments.map(c => `<p>${escapeHtml(c)}</p>`).join('')}</div>`
+
+        // Safe & Secure remarks come from the parameter fields themselves —
+        // any non-compliant value that isn't YES / No Opportunity / NA is the remark.
+        const SAFE_FIELDS = [
+            'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?',
+            'DID WE FOLLOW THE DATA PRIVACY POLICY?',
+            'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?',
+            'DID WE FOLLOW THE CSAT/NPS PROCESS?',
+            'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?',
+            'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?',
+            'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?',
+            'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER?',
+            'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES'
+        ];
+        const SAFE_PASS = new Set(['YES', 'Y', 'NO OPPORTUNITY', 'NA', 'N/A', 'N.A.', '-', '--', 'NOT APPLICABLE', '']);
+        const safeRemarks = SAFE_FIELDS
+            .map(f => {
+                const v = String(r[f] || '').trim();
+                const vUp = v.toUpperCase();
+                if (SAFE_PASS.has(vUp) || vUp.startsWith('NO OPPORTUNITY')) return null;
+                // Format: short field label — remark text
+                const label = f.replace(/^DID WE |^DID THE AGENT |\?$/g, '').trim();
+                return `Safe & Secure · ${label}: ${v}`;
+            })
+            .filter(Boolean);
+
+        const allComments = [...stdComments, ...safeRemarks];
+        const commentsHtml = allComments.length
+            ? `<div class="audit-comments">${allComments.map(c => `<p>${escapeHtml(c)}</p>`).join('')}</div>`
             : '';
 
         return `<div class="audit-row">
