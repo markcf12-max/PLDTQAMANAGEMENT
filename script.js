@@ -731,6 +731,7 @@ const NEEDED_FIELDS = [
     'RELIABLE', 'PERSONABLE', 'FAST', 'SAFE & SECURE', 'OVERALL SCORE',
     'EE number/ID number', 'OVERALL PASSRATE', 'CM', 'PASSRATE CM',
     'RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS',
+    'WHAT MATTERS TO THE BUSINESS REMARKS',
     'Agent Work Setup2'
 ].concat(HIT_PARAMS.map(p => p.col), SCORE_SOURCE_FIELDS);
 
@@ -1460,37 +1461,16 @@ async function renderAgentView() {
             ? issues.map(i => `<span class="tag ${i.category.replace(/\s|&/g, '')}">${escapeHtml(i.label)}</span>`).join('')
             : `<span class="no-issues-note">✓ No parameters flagged on this audit.</span>`;
 
-        // Standard comment columns (Reliable / Personable / Fast)
-        const stdComments = ['RELIABLE: ADDITIONAL COMMENTS', 'PERSONABLE: ADDITIONAL COMMENTS', 'FAST: ADDITIONAL COMMENTS']
+        // Standard comment columns (Reliable / Personable / Fast / Safe & Secure)
+        const allComments = [
+            'RELIABLE: ADDITIONAL COMMENTS',
+            'PERSONABLE: ADDITIONAL COMMENTS',
+            'FAST: ADDITIONAL COMMENTS',
+            'WHAT MATTERS TO THE BUSINESS REMARKS'
+        ]
             .map(f => String(r[f] || '').trim())
             .filter(c => c && !NON_ISSUE_VALUES.has(c.toUpperCase()));
 
-        // Safe & Secure remarks come from the parameter fields themselves —
-        // any non-compliant value that isn't YES / No Opportunity / NA is the remark.
-        const SAFE_FIELDS = [
-            'DID WE FOLLOW THE CUSTOMER AUTHENTICATION PROCESS?',
-            'DID WE FOLLOW THE DATA PRIVACY POLICY?',
-            'DID WE UPDATE THE CUSTOMER INFORMATION IN THE TOOL?',
-            'DID WE FOLLOW THE CSAT/NPS PROCESS?',
-            'DID WE FOLLOW THE SYSTEM DOCUMENTATION PROCESS?',
-            'DID WE FOLLOW THE SYSTEM TAGGING PROCESS?',
-            'DID WE FOLLOW CORRECT GRAMMAR, TECHNICAL WRITING & THE PRESCRIBED LANGUAGE?',
-            'DID THE AGENT OFFER SELF-CARE HELP TO THE CUSTOMER?',
-            'DID THE AGENT UPSELL OR CROSS SELL RELEVANT PRODUCTS & SERVICES'
-        ];
-        const SAFE_PASS = new Set(['YES', 'Y', 'NO OPPORTUNITY', 'NA', 'N/A', 'N.A.', '-', '--', 'NOT APPLICABLE', '']);
-        const safeRemarks = SAFE_FIELDS
-            .map(f => {
-                const v = String(r[f] || '').trim();
-                const vUp = v.toUpperCase();
-                if (SAFE_PASS.has(vUp) || vUp.startsWith('NO OPPORTUNITY')) return null;
-                // Format: short field label — remark text
-                const label = f.replace(/^DID WE |^DID THE AGENT |\?$/g, '').trim();
-                return `Safe & Secure · ${label}: ${v}`;
-            })
-            .filter(Boolean);
-
-        const allComments = [...stdComments, ...safeRemarks];
         const commentsHtml = allComments.length
             ? `<div class="audit-comments">${allComments.map(c => `<p>${escapeHtml(c)}</p>`).join('')}</div>`
             : '';
