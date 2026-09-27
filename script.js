@@ -1461,18 +1461,25 @@ async function renderAgentView() {
             ? issues.map(i => `<span class="tag ${i.category.replace(/\s|&/g, '')}">${escapeHtml(i.label)}</span>`).join('')
             : `<span class="no-issues-note">✓ No parameters flagged on this audit.</span>`;
 
-        // Standard comment columns (Reliable / Personable / Fast / Safe & Secure)
-        const allComments = [
-            'RELIABLE: ADDITIONAL COMMENTS',
-            'PERSONABLE: ADDITIONAL COMMENTS',
-            'FAST: ADDITIONAL COMMENTS',
-            'WHAT MATTERS TO THE BUSINESS REMARKS'
-        ]
-            .map(f => String(r[f] || '').trim())
-            .filter(c => c && !NON_ISSUE_VALUES.has(c.toUpperCase()));
+        // Build labeled comment blocks — one per category, shown only when non-empty
+        const COMMENT_FIELDS = [
+            { field: 'RELIABLE: ADDITIONAL COMMENTS',         label: 'Reliable' },
+            { field: 'PERSONABLE: ADDITIONAL COMMENTS',       label: 'Personable' },
+            { field: 'FAST: ADDITIONAL COMMENTS',             label: 'Fast' },
+            { field: 'WHAT MATTERS TO THE BUSINESS REMARKS',  label: 'Safe & Secure' }
+        ];
+        const commentBlocks = COMMENT_FIELDS
+            .map(({ field, label }) => {
+                const text = String(r[field] || '').trim();
+                if (!text || NON_ISSUE_VALUES.has(text.toUpperCase())) return null;
+                return { label, text };
+            })
+            .filter(Boolean);
 
-        const commentsHtml = allComments.length
-            ? `<div class="audit-comments">${allComments.map(c => `<p>${escapeHtml(c)}</p>`).join('')}</div>`
+        const commentsHtml = commentBlocks.length
+            ? `<div class="audit-comments">${commentBlocks.map(b =>
+                `<p><strong class="comment-label">${escapeHtml(b.label)}:</strong> ${escapeHtml(b.text)}</p>`
+              ).join('')}</div>`
             : '';
 
         return `<div class="audit-row">
