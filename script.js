@@ -15,8 +15,8 @@ function positionToRole(position) {
     const p = String(position || '').trim();
     // Quality — QA and Quality titles get full dashboard + upload access
     if (/qa apprentice|qa sup|qa-data scrubber|quality analyst|quality manager|quality/i.test(p)) return 'quality';
-    // Team Leader & Trainers — dashboard view access only (no upload)
-    if (/supervisor|tl apprentice|team leader|sr\.\s*supervisor|trainer|trainer apprentice/i.test(p)) return 'team_leader';
+    // Team Leader & Training — dashboard view access only (no upload)
+    if (/supervisor|tl apprentice|team leader|sr\.\s*supervisor|trainer|trainer apprentice|training supervisor/i.test(p)) return 'team_leader';
     return 'agent';
 }
 
