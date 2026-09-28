@@ -13,12 +13,12 @@ const QUALITY_INVITE_CODE = 'PLDT-QA-2026';       // kept for legacy but no long
 // Maps roster Position values to app roles
 function positionToRole(position) {
     const p = String(position || '').trim();
-    // Quality — all QA and Quality titled positions get full dashboard + upload access
+    // Quality — QA and Quality titles get full dashboard + upload access
     if (/qa apprentice|qa sup|qa-data scrubber|quality analyst|quality manager|quality/i.test(p)) return 'quality';
-    // Team Leader — supervisors get dashboard view but not upload
-    if (/supervisor|tl apprentice|team leader|sr\.\s*supervisor/i.test(p)) return 'team_leader';
+    // Team Leader & Trainers — dashboard view access only (no upload)
+    if (/supervisor|tl apprentice|team leader|sr\.\s*supervisor|trainer|trainer apprentice/i.test(p)) return 'team_leader';
     return 'agent';
-} 
+}
 
 let lobChartInstance = null;
 let siteChartInstance = null;
