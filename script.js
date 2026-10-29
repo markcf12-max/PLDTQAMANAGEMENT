@@ -24,7 +24,7 @@ let lobChartInstance = null;
 let siteChartInstance = null;
 
 /* ==========================================================================
-   FIRESTORE BATCH HELPERS (Concurrent Writes)
+   FIRESTORE BATCH HELPERS
    ========================================================================== */
 async function batchWriteDocs(collectionName, docs, idFn) {
     const chunks = [];
@@ -52,6 +52,49 @@ async function clearCollection(collectionName) {
     }
 }
 
+/* ==========================================================================
+   AUDIT KEYS  (stable identity of one audit row)
+   --------------------------------------------------------------------------
+   Every audit gets a deterministic Firestore document ID built from the
+   form response "ID" column. The same audit therefore always maps to the
+   same document, which lets us detect what is already saved and upload
+   only what is new.
+   ========================================================================== */
+function auditKey(row) {
+    const id = String(row['ID'] ?? '').trim();
+    const base = id
+        ? 'id_' + id
+        : 'k_' + [
+            row['Start time'],
+            normalizeEmployeeId(row['EE number/ID number']),
+            normalizeName(row['AGENT/OFFICER NAME'])
+          ].join('|');
+    return base.replace(/[\/\s]/g, '_').slice(0, 200);
+}
+
+/* ==========================================================================
+   INCREMENTAL APPEND  (default weekly upload — writes ONLY new rows)
+   ========================================================================== */
+async function appendAuditData(newRows, totalAfter, onProgress = null) {
+    const total = newRows.length;
+    let done = 0;
+    for (let i = 0; i < total; i += 400) {
+        const chunk = newRows.slice(i, i + 400);
+        const b = writeBatch(db);
+        chunk.forEach(row => b.set(doc(db, 'auditData', auditKey(row)), row));
+        await b.commit();
+        done += chunk.length;
+        if (typeof onProgress === 'function') onProgress('Uploading new audits', done, total);
+        if (done < total) await new Promise(r => setTimeout(r, 200));
+    }
+    await setDoc(doc(db, 'meta', 'auditData'), { count: totalAfter, updatedAt: Date.now() });
+}
+
+/* ==========================================================================
+   FULL RELOAD  (deletes everything, then writes the whole file)
+   Only used when the "Full reload" checkbox is ticked — e.g. when old
+   audits were corrected in the Excel file and need to overwrite what's saved.
+   ========================================================================== */
 async function replaceAuditData(rows, onProgress = null) {
     const report = (phase, done, total) => {
         if (typeof onProgress === 'function') onProgress(phase, done, total);
@@ -76,9 +119,7 @@ async function replaceAuditData(rows, onProgress = null) {
     }
 
     // DELETE — read every doc that actually exists rather than relying on a
-    // stored count. A previous upload with more rows than the current one
-    // would leave "ghost" rows that never got deleted under the old
-    // index-range approach, silently corrupting every aggregate.
+    // stored count, so no ghost rows from older uploads are left behind.
     report('Removing previous audit data', 0, 1);
     const existingSnap = await getDocs(collection(db, 'auditData'));
     if (existingSnap.size > 0) {
@@ -98,13 +139,13 @@ async function replaceAuditData(rows, onProgress = null) {
         await commitBatchesWindowed('Removing previous audit data', deleteBatches);
     }
 
-    // WRITE new rows
+    // WRITE new rows (keyed by auditKey so later incremental uploads line up)
     if (rows.length > 0) {
         const writeBatches = [];
         for (let i = 0; i < rows.length; i += 400) {
             const chunk = rows.slice(i, i + 400);
             const b = writeBatch(db);
-            chunk.forEach((row, idx) => b.set(doc(db, 'auditData', 'row_' + (i + idx)), row));
+            chunk.forEach(row => b.set(doc(db, 'auditData', auditKey(row)), row));
             writeBatches.push({ batch: b, count: chunk.length });
         }
         await commitBatchesWindowed('Uploading audit data', writeBatches);
@@ -128,9 +169,6 @@ function getNormalizedRole(roleStr) {
 }
 
 /* ==========================================================================
-   AUTH & USER MANAGEMENT
-   ========================================================================== */
-/* ==========================================================================
    SESSION & AUTH (Roster-based — no Firebase Auth account creation needed)
    ========================================================================== */
 function showAuthMsg(elId, text, ok) {
@@ -140,11 +178,7 @@ function showAuthMsg(elId, text, ok) {
     el.className = 'auth-msg ' + (ok ? 'ok' : 'error');
 }
 
-// Permanent admin accounts — always get Quality access regardless of roster state.
-// These are used for initial setup (uploading roster, raw data) before any
-// other accounts are configured. Username is the t- prefix without @pldt.com.ph.
-// Privileged accounts — stored in the roster with Quality role.
-// Login derives role from the roster's position field automatically.
+// Login derives role from the roster's Position field automatically.
 // No hardcoded bypass or role selector needed.
 
 async function handleLogin() {
@@ -263,7 +297,7 @@ async function enterApp() {
 
     const normalizedRole = getNormalizedRole(currentSession.role);
     const roleLabels = { quality: '👤 Quality · ', team_leader: '👤 Team Leader · ', supervisor: '👤 Quality · ', agent: '👤 Agent · ' };
-    
+
     if (sessionLabel) {
         sessionLabel.textContent = (roleLabels[normalizedRole] || '👤 ') + currentSession.email;
     }
@@ -292,14 +326,14 @@ async function enterApp() {
         }
         const rows = cachedAuditRows;
         console.log(`Loaded ${rows.length} rows for Supervisor view.`);
-        
+
         const dataStatus = document.getElementById('dataStatus');
         if (dataStatus) {
-            dataStatus.innerHTML = rows.length 
-                ? `✅ ${rows.length} audit rows loaded.` 
+            dataStatus.innerHTML = rows.length
+                ? `✅ ${rows.length} audit rows loaded.`
                 : `⚠️ 0 rows in auditData collection. Use the upload button to import data.`;
         }
-        
+
         populateDropdownOptions(rows, true); // true = auto-select latest weekending on login
         filterData();
     } else {
@@ -443,7 +477,7 @@ async function parseWorkbookMultiSheet(file, sheetGroups) {
 function findHeader(row, candidates) {
     if (!row) return null;
     const keys = Object.keys(row);
-    
+
     for (const cand of candidates) {
         const hit = keys.find(k => k.trim().toLowerCase() === cand.trim().toLowerCase());
         if (hit) return hit;
@@ -617,6 +651,9 @@ function renderUnmatchedList(rows) {
         (rows.length > 50 ? `<div class="file-status">…and ${rows.length - 50} more.</div>` : '');
 }
 
+// Re-matches every saved audit against the roster. To protect the Firestore
+// write quota, only documents whose email / Team Leader / status actually
+// changed are written back.
 async function resyncAgentEmails() {
     const statusEl = document.getElementById('resyncStatus');
     if (statusEl) statusEl.textContent = 'Re-syncing agent, email, status, and Team Leader matches...';
@@ -632,53 +669,58 @@ async function resyncAgentEmails() {
         });
         const dataSnap = await getDocs(collection(db, 'auditData'));
         const docs = dataSnap.docs;
-        let matched = 0, unmatchedCount = 0, leaders = 0;
+        let matched = 0, unmatchedCount = 0, leaders = 0, changed = 0;
         const unmatchedRows = [];
 
-        // Build all batches first (pure CPU work), then commit with rate limiting
         const batches = [];
-        for (let i = 0; i < docs.length; i += 400) {
-            const chunk = docs.slice(i, i + 400);
-            const batch = writeBatch(db);
-            chunk.forEach(d => {
-                const row = d.data();
-                const id = normalizeEmployeeId(row['EE number/ID number'] || row['WIN ID'] || row['ID']);
-                const match = (id && byId[id]) || byName[normalizeName(row['AGENT/OFFICER NAME'])] || null;
-                const email = match ? (match.email || '') : '';
-                const agentStatus = match ? (match.status || 'UNKNOWN') : 'UNKNOWN';
-                const teamLeader = String(row['TEAM LEADER'] || (match ? match.teamLeader : '') || '').trim();
-                if (match) { matched++; } else { unmatchedCount++; unmatchedRows.push({ name: row['AGENT/OFFICER NAME'], id, source: 'resync' }); }
-                if (teamLeader) leaders++;
-                batch.update(doc(db, 'auditData', d.id), { agentEmailLower: email, 'TEAM LEADER': teamLeader, 'AGENT STATUS': agentStatus });
-            });
-            batches.push(batch);
-        }
+        let batch = writeBatch(db);
+        let opCount = 0;
+        const newCache = [];
 
-        // Sequential commits with delay — prevents write stream exhaustion
-        for (const batch of batches) {
-            await batch.commit();
-            await new Promise(r => setTimeout(r, 200));
-        }
-
-        // Update the in-memory cache directly — the data is already in memory
-        // from the dataSnap we read above, updated with the new email/TL/status.
-        // This avoids a second full Firestore read of 10k+ docs.
-        cachedAuditRows = dataSnap.docs.map(d => {
+        docs.forEach(d => {
             const row = d.data();
             const id = normalizeEmployeeId(row['EE number/ID number'] || row['WIN ID'] || row['ID']);
             const match = (id && byId[id]) || byName[normalizeName(row['AGENT/OFFICER NAME'])] || null;
-            return {
-                ...row,
-                agentEmailLower: match ? (match.email || '') : '',
-                'TEAM LEADER': String(row['TEAM LEADER'] || (match ? match.teamLeader : '') || '').trim(),
-                'AGENT STATUS': match ? (match.status || 'UNKNOWN') : 'UNKNOWN'
-            };
+            const email = match ? (match.email || '') : '';
+            const agentStatus = match ? (match.status || 'UNKNOWN') : 'UNKNOWN';
+            const teamLeader = String(row['TEAM LEADER'] || (match ? match.teamLeader : '') || '').trim();
+
+            if (match) { matched++; } else { unmatchedCount++; unmatchedRows.push({ name: row['AGENT/OFFICER NAME'], id, source: 'resync' }); }
+            if (teamLeader) leaders++;
+
+            const isSame =
+                (row.agentEmailLower || '') === email &&
+                String(row['TEAM LEADER'] || '').trim() === teamLeader &&
+                (row['AGENT STATUS'] || '') === agentStatus;
+
+            if (!isSame) {
+                batch.update(d.ref, { agentEmailLower: email, 'TEAM LEADER': teamLeader, 'AGENT STATUS': agentStatus });
+                opCount++;
+                changed++;
+                if (opCount === 400) {
+                    batches.push(batch);
+                    batch = writeBatch(db);
+                    opCount = 0;
+                }
+            }
+
+            newCache.push({ ...row, agentEmailLower: email, 'TEAM LEADER': teamLeader, 'AGENT STATUS': agentStatus });
         });
+        if (opCount > 0) batches.push(batch);
+
+        // Sequential commits with delay — prevents write stream exhaustion
+        for (const b of batches) {
+            await b.commit();
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        // Update the in-memory cache directly (no second full Firestore read).
+        cachedAuditRows = newCache;
         populateDropdownOptions(cachedAuditRows);
         filterData();
         lastUnmatchedRows = unmatchedRows;
         renderUnmatchedList(unmatchedRows);
-        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} agent matches, ${leaders} rows with Team Leader, ${unmatchedCount} not on the roster.`;
+        if (statusEl) statusEl.textContent = `✅ Re-synced: ${matched} agent matches, ${leaders} rows with Team Leader, ${unmatchedCount} not on the roster. ${changed} audit record(s) updated.`;
     } catch (err) {
         console.error(err);
         if (statusEl) statusEl.textContent = '⚠️ Re-sync failed: ' + err.message;
@@ -837,12 +879,33 @@ function calculateGenuineCareScores(row) {
     };
 }
 
+/* --------------------------------------------------------------------------
+   RAW AUDIT UPLOAD
+   Default (incremental): the saved audits are the checkpoint. The file is
+   read, every row is compared against what's already saved (by auditKey),
+   and ONLY the rows that are not saved yet get written to Firestore.
+
+   Optional "Full reload": tick a checkbox with id="fullReloadToggle" in the
+   upload panel to wipe and re-upload everything (use when old audits were
+   edited in the Excel file).
+   -------------------------------------------------------------------------- */
 async function handleDataUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
     const dataStatus = document.getElementById('dataStatus');
     if (dataStatus) dataStatus.textContent = 'Processing ' + file.name + '...';
     try {
+        const fullReloadEl = document.getElementById('fullReloadToggle');
+        const fullReload = !!(fullReloadEl && fullReloadEl.checked);
+
+        if (fullReload) {
+            const ok = window.confirm('Full reload will DELETE all saved audits and re-upload the entire file. This uses a lot of Firestore quota. Continue?');
+            if (!ok) {
+                if (dataStatus) dataStatus.textContent = 'Full reload cancelled.';
+                return;
+            }
+        }
+
         const rows = await parseWorkbookFile(file, ['RAW', 'DATA', 'SHEET1']);
         if (!rows.length) throw new Error('Data file appears empty.');
         const headerMap = {};
@@ -854,6 +917,38 @@ async function handleDataUpload(event) {
         const missing = required.filter(f => !headerMap[f]);
         if (missing.length) throw new Error('Missing required raw-data column(s): ' + missing.join(', '));
 
+        // Make sure we know what is already saved (normally already in memory,
+        // so this costs no extra reads).
+        if (!fullReload && !cachedAuditRows.length) await loadAllAuditData();
+        const existingKeys = fullReload ? new Set() : new Set(cachedAuditRows.map(auditKey));
+
+        // Pre-filter against the checkpoint BEFORE doing any scoring work,
+        // so a year-long file only processes the new rows.
+        const seen = new Set();
+        const candidateRows = [];
+        let alreadySaved = 0;
+        rows.forEach(r => {
+            const probe = {
+                'ID': headerMap['ID'] ? r[headerMap['ID']] : '',
+                'Start time': headerMap['Start time'] ? r[headerMap['Start time']] : '',
+                'EE number/ID number': headerMap['EE number/ID number'] ? r[headerMap['EE number/ID number']] : '',
+                'AGENT/OFFICER NAME': r[headerMap['AGENT/OFFICER NAME']]
+            };
+            if (!String(probe['AGENT/OFFICER NAME'] || '').trim()) return;
+            const k = auditKey(probe);
+            if (existingKeys.has(k)) { alreadySaved++; return; }
+            if (seen.has(k)) return; // duplicate row inside the file
+            seen.add(k);
+            candidateRows.push(r);
+        });
+
+        if (!fullReload && !candidateRows.length) {
+            if (dataStatus) dataStatus.innerHTML =
+                `✅ No new audits found. All ${alreadySaved.toLocaleString()} rows in this file are already saved.`;
+            return; // finally{} still resets the file input
+        }
+
+        // Roster lookup (only needed when there is something to upload)
         const rosterSnap = await getDocs(collection(db, 'roster'));
         const nameToRoster = {}, idToRoster = {};
         rosterSnap.forEach(d => {
@@ -863,11 +958,12 @@ async function handleDataUpload(event) {
             const rosterId = normalizeEmployeeId(data.agentId);
             if (rosterId) idToRoster[rosterId] = item;
         });
+
         const UPPERCASE_FIELDS = ['FORM TYPE', 'AGENT TENURE'];
         const TRIM_ONLY_FIELDS = ['BRAND', 'LINE OF BUSINESS', 'TEAM LEADER'];
-        let calculatedCount = 0;
         const unmatched = [];
-        const processed = rows.map(r => {
+
+        const processed = candidateRows.map(r => {
             const out = {};
             NEEDED_FIELDS.forEach(f => {
                 const h = headerMap[f];
@@ -881,7 +977,6 @@ async function handleDataUpload(event) {
             const period = deriveWeekendingAndMonth(out['Start time']);
             if (period.weekending) out['WEEKENDING'] = period.weekending;
             if (period.month) out['MONTH'] = period.month;
-            calculatedCount++;
 
             const auditId = normalizeEmployeeId(out['EE number/ID number'] || out['WIN ID'] || out['ID']);
             const rosterMatch = (auditId && idToRoster[auditId]) || nameToRoster[normalizeName(out['AGENT/OFFICER NAME'])] || null;
@@ -895,21 +990,36 @@ async function handleDataUpload(event) {
 
             return out;
         }).filter(r => String(r['AGENT/OFFICER NAME'] || '').trim());
-        await replaceAuditData(processed, (phase, done, total) => {
+
+        const progress = (phase, done, total) => {
             if (!dataStatus) return;
             const pct = total ? Math.round(done / total * 100) : 100;
             dataStatus.textContent = `${phase}: ${done.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`;
-        });
-        cachedAuditRows = processed;
-        const safeValues = processed.map(r => r['SAFE & SECURE']).filter(v => v !== null && v !== undefined && !isNaN(v));
-        const safeAverage = safeValues.length ? Math.round(safeValues.reduce((a, b) => a + Number(b), 0) / safeValues.length) : 0;
+        };
+
+        let allRows;
+        if (fullReload) {
+            await replaceAuditData(processed, progress);
+            cachedAuditRows = processed;
+            allRows = processed;
+        } else {
+            await appendAuditData(processed, cachedAuditRows.length + processed.length, progress);
+            cachedAuditRows = cachedAuditRows.concat(processed);
+            allRows = cachedAuditRows;
+        }
+
         const leaderRows = processed.filter(r => String(r['TEAM LEADER'] || '').trim()).length;
         const activeRows = processed.filter(r => r['AGENT STATUS'] === 'ACTIVE').length;
         const termedRows = processed.filter(r => r['AGENT STATUS'] === 'TERMED').length;
-        if (dataStatus) dataStatus.innerHTML = `✅ Uploaded and fully synchronized ${processed.length} audits. Safe & Secure average: ${safeAverage}%. Team Leader matched: ${leaderRows}/${processed.length}. Roster status: ${activeRows} active, ${termedRows} termed, ${unmatched.length} not on roster. No manual re-sync is required.`;
+
+        if (dataStatus) {
+            dataStatus.innerHTML = fullReload
+                ? `✅ Full reload complete: ${processed.length.toLocaleString()} audits saved. Team Leader matched: ${leaderRows}/${processed.length}. Roster status: ${activeRows} active, ${termedRows} termed, ${unmatched.length} not on roster.`
+                : `✅ ${processed.length.toLocaleString()} new audit(s) added (${alreadySaved.toLocaleString()} already saved, ${allRows.length.toLocaleString()} total). Team Leader matched: ${leaderRows}/${processed.length}. New rows: ${activeRows} active, ${termedRows} termed, ${unmatched.length} not on roster.`;
+        }
         lastUnmatchedRows = unmatched;
         renderUnmatchedList(unmatched);
-        populateDropdownOptions(processed, true); // auto-select latest weekending after upload
+        populateDropdownOptions(allRows, true); // auto-select latest weekending after upload
         filterData();
     } catch (err) {
         console.error('Data Upload Failed:', err);
@@ -958,10 +1068,6 @@ function populateDropdownOptions(rows, autoSelectLatestWeekending = false) {
     }
 }
 
-// Valid LINE OF BUSINESS values that exist in the current raw file.
-// Any audit doc whose LOB is not in this set is a ghost row from an older
-// upload (e.g. "BOH - Account Management" before it was renamed to
-// "BOH - DIS Account Management") and should be purged automatically.
 async function loadAllAuditData() {
     try {
         const snap = await getDocs(collection(db, 'auditData'));
@@ -1114,8 +1220,8 @@ function renderGroupedBarChart(data) {
                 },
                 x: {
                     grid: { display: false },
-                    ticks: { 
-                        font: { size: 9, weight: '600' }, 
+                    ticks: {
+                        font: { size: 9, weight: '600' },
                         color: '#333',
                         maxRotation: 45,
                         minRotation: 0,
@@ -1222,7 +1328,6 @@ function renderSummaryTables(data) {
     const auditBody = document.getElementById('auditCountSummaryBody');
     const avgBody = document.getElementById('averageScoreSummaryBody');
 
-    const COLS = 9; // LOB label + NCIP + NHIP + 0-30 + 31-60 + 61-90 + >91 + Grand Total + pass/fail columns
     if (!data || !data.length) {
         if (passBody) passBody.innerHTML = `<tr><td colspan="4" class="empty-note">Upload data to populate.</td></tr>`;
         if (auditBody) auditBody.innerHTML = `<tr><td colspan="8" class="empty-note">Upload data to populate.</td></tr>`;
@@ -1337,7 +1442,7 @@ function renderSupervisorDashboard(data) {
         if (cmUnderperformerVal) cmUnderperformerVal.textContent = '-';
         if (leaderChart) leaderChart.innerHTML = '<div class="empty-note">No matching data.</div>';
         if (topHitsBody) topHitsBody.innerHTML = '<tr><td colspan="3" class="empty-note">No matching audit data available.</td></tr>';
-        
+
         if (lobChartInstance) {
             lobChartInstance.destroy();
             lobChartInstance = null;
@@ -1390,7 +1495,7 @@ function renderSupervisorDashboard(data) {
         });
     });
     const sortedHits = Object.entries(hitCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
-    
+
     if (topHitsBody) {
         topHitsBody.innerHTML = sortedHits.length
             ? sortedHits.map(([key, count]) => {
